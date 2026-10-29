@@ -322,10 +322,15 @@ private fun OrbButton(
 fun SaifLiveOrbBubble(
     onOpen: () -> Unit,
     onClose: () -> Unit,
+    onDrag: ((Float, Float) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val state by SaifAutomation.orbState.collectAsState()
     val level by SaifAutomation.audioLevel.collectAsState()
+    // Drag bookkeeping: a press that moves more than a few pixels is a drag, not a tap.
+    var downX by remember { mutableStateOf(0f) }
+    var downY by remember { mutableStateOf(0f) }
+    var dragging by remember { mutableStateOf(false) }
     val pulse = rememberInfiniteTransition(label = "orb_bubble_pulse")
     val glow by pulse.animateFloat(
         initialValue = 0.35f, targetValue = 0.9f,
@@ -342,7 +347,38 @@ fun SaifLiveOrbBubble(
             .size(78.dp)
             .clip(CircleShape)
             .background(Brush.radialGradient(listOf(ring.copy(alpha = 0.35f + glow * 0.3f * (0.4f + level)), androidx.compose.ui.graphics.Color(0xCC0B0A14))))
-            .pointerInteropFilter { ev -> if (ev.action == MotionEvent.ACTION_UP) { onOpen(); true } else ev.action == MotionEvent.ACTION_DOWN },
+            .pointerInteropFilter { ev ->
+                when (ev.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = ev.rawX
+                        downY = ev.rawY
+                        dragging = false
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = ev.rawX - downX
+                        val dy = ev.rawY - downY
+                        if (!dragging && (kotlin.math.abs(dx) > 10f || kotlin.math.abs(dy) > 10f)) dragging = true
+                        if (dragging && onDrag != null) {
+                            onDrag(dx, dy)
+                            downX = ev.rawX
+                            downY = ev.rawY
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val wasDragging = dragging
+                        dragging = false
+                        if (!wasDragging) onOpen()
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        dragging = false
+                        true
+                    }
+                    else -> false
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         SaifLiveOrb(modifier = Modifier.size(66.dp), compact = true)

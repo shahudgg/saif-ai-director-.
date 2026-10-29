@@ -123,11 +123,13 @@ fun SaifAiApp(
         }
         val started = com.jarvis.assistant.SaifAutomation.startScreenShare(projection, metrics)
         com.example.ui.components.SaifLiveSession.pendingScreenShare = false
-        android.widget.Toast.makeText(
-            context,
-            if (started) "SAIF AI ab aapki screen dekh kar madad karega." else "Screen share start nahi ho paya.",
-            android.widget.Toast.LENGTH_LONG
-        ).show()
+        val shareMessage = when {
+            started -> "SAIF AI ab aapki screen dekh kar madad karega."
+            com.jarvis.assistant.SaifAutomation.isScreenSharePending ->
+                "Live session ready hote hi screen share apne aap shuru ho jayega."
+            else -> "Screen share start nahi ho paya."
+        }
+        android.widget.Toast.makeText(context, shareMessage, android.widget.Toast.LENGTH_LONG).show()
     }
     var activeVideoProjectData by remember { mutableStateOf<com.example.ui.components.VideoProjectData?>(null) }
     var showVideoStudio by remember { mutableStateOf(false) }

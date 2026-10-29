@@ -21,7 +21,12 @@ object LiveVoiceManager {
         }
     }
 
-    private fun startLiveVoice(context: Context) {
+    /**
+     * Starts the foreground live-voice session. Public because the provider-agnostic automation
+     * engine ([com.example.SaifHostLiveEngine]) starts the very same session - the automation module
+     * can no longer assume a Gemini Live WebSocket is available.
+     */
+    fun startLiveVoice(context: Context) {
         val intent = Intent(context, LiveVoiceService::class.java)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             context.startForegroundService(intent)

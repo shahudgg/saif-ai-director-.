@@ -21,6 +21,7 @@ import com.example.util.DeviceAction
 import com.example.util.DeviceActionManager
 import com.example.util.DeviceActionParser
 import com.example.util.SaifAccessibilityService
+import com.example.util.SaifLiveScreen
 import com.example.util.SaifMemoryCore
 import com.example.util.SmartConversationMemory
 import com.example.utils.TTSManager
@@ -62,6 +63,28 @@ class LiveVoiceSessionManager(
 
     private val _liveSubtitle = MutableStateFlow("")
     val liveSubtitle: StateFlow<String> = _liveSubtitle.asStateFlow()
+
+    /** What the user said in the current turn (separate from [liveSubtitle], which also shows status). */
+    private val _userCaption = MutableStateFlow("")
+    val userCaption: StateFlow<String> = _userCaption.asStateFlow()
+
+    /** The sentence SAIF AI is speaking right now. */
+    private val _aiCaption = MutableStateFlow("")
+    val aiCaption: StateFlow<String> = _aiCaption.asStateFlow()
+
+    /**
+     * Why the last turn produced nothing - usually "no speech-to-text provider configured". Exposed
+     * so the live UI can explain it instead of staying silently stuck on LISTENING.
+     */
+    private val _turnError = MutableStateFlow<String?>(null)
+    val turnError: StateFlow<String?> = _turnError.asStateFlow()
+
+    /**
+     * Mutes the microphone without tearing the session down. While muted, captured frames are
+     * dropped before VAD so the orb never reacts to background sound either.
+     */
+    @Volatile
+    var isMicMuted: Boolean = false
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -143,8 +166,33 @@ class LiveVoiceSessionManager(
         Log.i(TAG, "LiveVoiceSessionManager started with real-time AudioPipeline")
     }
 
+    /**
+     * Feeds typed text into the live session exactly like a spoken turn. Used by the
+     * provider-agnostic live engine so the "send text" control works on every API.
+     */
+    fun submitText(rawText: String) {
+        val clean = rawText.trim()
+        if (clean.isEmpty()) return
+        if (!isProcessingTurn.compareAndSet(false, true)) {
+            Log.d(TAG, "Turn processor busy; typed text dropped.")
+            return
+        }
+        processingJob?.cancel()
+        processingJob = scope.launch {
+            try {
+                handleUtterance(clean)
+            } finally {
+                isProcessingTurn.set(false)
+            }
+        }
+    }
+
     private fun handleIncomingAudioFrame(frame: ByteArray) {
         if (!isRecording) return
+        if (isMicMuted) {
+            _amplitude.value = 0f
+            return
+        }
 
         val now = System.currentTimeMillis()
         val isCurrentlySpeaking = isTtsSpeaking || _sessionState.value == VoiceSessionState.SPEAKING
@@ -243,6 +291,7 @@ class LiveVoiceSessionManager(
             if (!transcriptionResult.isSuccess) {
                 val err = transcriptionResult.exceptionOrNull()?.message ?: "Transcription failed"
                 Log.d(TAG, "Transcription filtered/failed: $err")
+                _turnError.value = err
                 _liveSubtitle.value = if (turnManager.isTaskRunning.value) "Executing..." else "LISTENING"
                 _sessionState.value = VoiceSessionState.LISTENING
                 turnManager.transitionTo(TurnState.LISTENING)
@@ -258,6 +307,29 @@ class LiveVoiceSessionManager(
             }
 
             Log.i(TAG, "Live Voice Utterance Transcribed: \"$text\"")
+
+            handleUtterance(text)
+        } catch (e: Exception) {
+            if (e is CancellationException) {
+                Log.d(TAG, "Turn processing cancelled by user barge-in.")
+                return
+            }
+            Log.e(TAG, "Error in processAudioTurn: ${e.message}", e)
+            _liveSubtitle.value = "LISTENING"
+            _sessionState.value = VoiceSessionState.LISTENING
+            turnManager.transitionTo(TurnState.LISTENING)
+        }
+    }
+
+    /**
+     * Handles one finished user utterance: task-lane routing, memory recall, the LLM call, device
+     * actions and TTS. Shared by the microphone turn and by typed text so that every API provider
+     * gets exactly the same brain.
+     */
+    private suspend fun handleUtterance(text: String) {
+        _userCaption.value = text
+        _turnError.value = null
+        try {
 
             // Check Task Lane Isolation
             val taskAction = turnManager.shouldProcessUtterance(text)
@@ -485,7 +557,7 @@ SPOKEN RESPONSE FORMAT:
                 mode = "general",
                 history = conversationHistory,
                 customSystemPrompt = fullSystemPrompt,
-                base64Images = emptyList(),
+                base64Images = SaifLiveScreen.frameForPrompt(),
                 onChunk = { chunk ->
                     if (!kotlinx.coroutines.currentCoroutineContext().isActive) return@executeWithFallback
                     fullModelResponseBuilder.append(chunk)
@@ -577,7 +649,7 @@ SPOKEN RESPONSE FORMAT:
                 Log.d(TAG, "Turn processing cancelled by user barge-in.")
                 return
             }
-            Log.e(TAG, "Error in processAudioTurn: ${e.message}", e)
+            Log.e(TAG, "Error in handleUtterance: ${e.message}", e)
             _liveSubtitle.value = "LISTENING"
             _sessionState.value = VoiceSessionState.LISTENING
             turnManager.transitionTo(TurnState.LISTENING)
@@ -602,6 +674,7 @@ SPOKEN RESPONSE FORMAT:
                 _sessionState.value = VoiceSessionState.SPEAKING
                 isTtsSpeaking = true
                 _liveSubtitle.value = nextSentence
+                _aiCaption.value = nextSentence
 
                 startVoiceWaveAnimation()
 
@@ -684,6 +757,11 @@ SPOKEN RESPONSE FORMAT:
     }
 
     fun stop() {
+        _userCaption.value = ""
+        _aiCaption.value = ""
+        _turnError.value = null
+        isMicMuted = false
+        SaifLiveScreen.clear()
         isRecording = false
         isTtsSpeaking = false
         clearStreamingQueue()

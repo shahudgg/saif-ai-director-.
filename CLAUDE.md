@@ -60,8 +60,13 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
   `SaifHeader.kt` no longer has the red **+** button. The automation module is reached only through `com.jarvis.assistant.SaifAutomation`
   (host-facing API: `LiveMode`, engine flows, `startLive`/`stopLive`/`startScreenShare`/…, and the `hostVoiceName`/`hostMemory`/`hostAutoLanguage` resolvers
   that `SaifApplication` registers).
+- **Round 10 (live on any API):** `SaifHostLiveEngine.kt` (the provider-agnostic turn-based engine, registered as `SaifAutomation.hostLiveEngine`),
+  `util/SaifLiveScreen.kt` (buffers the newest screen frame so any vision provider can see the screen). `SaifAutomation` now **owns** its ten live flows
+  (`EngineKind`, `activeEngine`, `HostLiveEngine`/`HostLiveSink`, `ensureGeminiBridge`, `isScreenSharePending`) instead of aliasing `JarvisConversationService`'s.
+  `LiveVoiceSessionManager` gained `handleUtterance`/`submitText`/`isMicMuted`/`userCaption`/`aiCaption`/`turnError`. `LiveVoiceManager.startLiveVoice` is public.
+  `LiveVoiceService`'s floating window is now `SaifLiveOrbBubble` (+ optional `onDrag`); `FloatingVoiceOverlay.kt` is dead code, kept like `AssetCurator.kt`.
 - Tests: `app/src/test/java/com/example/studio/{director,composer}/` (+ Round 9: `AssetPlacementTest`, `AssetHunterTest`, `PlacementApplierTest`,
-  `SceneUniquenessTest`, `ElementClampTest`).
+  `SceneUniquenessTest`, `ElementClampTest`) and `app/src/test/java/com/example/LiveEngineRoutingTest.kt` (Round 10 engine-routing table).
 
 ## 4. How ZERO TO VIDEO works now (pipeline)
 1. Question cards → brief (`DirectorBrief`). `ensureSeed()` stores a random `styleSeed` → drives palette/backdrop (`StyleDNA`), **story shape** (`StoryStyles`) and **scene layout order** (`SceneArchetypes`) so every video differs.
@@ -81,8 +86,12 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Voice clip `aiWhy` carries `grp=s1+s2` for grouped clips; SFX `aiWhy` carries `@offsetMs`. `retimeAfterChange` relies on both.
 
 ## 6. Known limitations (be honest about them)
-- Not compiled outside CI. Highest-risk code: export audio mux, TTS to file, and the new Round-9 Kotlin (`AssetHunter`, `AssetPlacement`, `SceneFx`, `huntAssets`, `SaifLiveOrb`, `SaifMemoryCore`) — see section 9.
-- **The live conversation still speaks only the Gemini Live WebSocket protocol** (`GeminiLiveWebSocket`, gated by `SaifApiConfig.isGemini`). The orb, screen share, mic and settings all work with any provider, but with a non-Gemini provider there is no turn-based STT → `AiClient` → TTS fallback yet, so the voice session will not connect. This is the biggest remaining piece of the automation merge.
+- Not compiled outside CI. Highest-risk code: export audio mux, TTS to file, and the new Round-9/10 Kotlin (`AssetHunter`, `AssetPlacement`, `SceneFx`, `huntAssets`, `SaifLiveOrb`, `SaifMemoryCore`, `SaifHostLiveEngine`, the `processAudioTurn` → `handleUtterance` split, `SaifAutomation`'s owned flows + bridge) — see section 9.
+- **Live baatcheet works on every provider since Round 10, but the two engines are not equivalent.** The Gemini Live socket is full-duplex (barge-in while it speaks, continuous screen streaming, server-side VAD); every other provider runs SAIF AI's turn-based engine (VAD → STT → LLM → on-device TTS), which is half-duplex and sends **one** screen frame per turn instead of a video stream.
+- Screen share on a non-Gemini provider only "sees" anything if the configured provider **and model** accept images (`base64Images`); a text-only model answers as if no screen was shared.
+- Speech-to-text needs at least one Groq, OpenAI or Gemini key (`SttRouter.resolveSttCandidates`). A provider set with none of those three cannot transcribe; `LiveVoiceSessionManager.turnError` now says so instead of sitting silently on LISTENING.
+- The Gemini-only live settings (Conversation Language / Personality from `GeminiConstants`) have no effect on the turn-based engine. The **Live Engine** card in Settings says which engine is active.
+- `SaifAutomation.audioFrequency` for the turn-based engine is a proportional split derived from mic energy, not a real FFT, so the orb's bass/high rings are approximate.
 - Narration is Android on-device TTS (needs a voice for the language), no cloud TTS/cloning. Quality depends on the device engine.
 - Telegram: bots cannot read old history; library = posts seen by the bot within 24 h of upload (sync workflow every 6 h) + posts already in the app.
 - Vision verification only on multimodal providers; otherwise technical checks only. Licences are "unverified".
@@ -99,14 +108,23 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 | Asset hidden behind graphics | `RenderPlan` z-order, `SCENE_OVERLAY_MARKER`, `AssetPlacement.role` (backdrop vs sticker) |
 | Asset in the wrong place / wrong size / spins oddly | the `@pl=` tag in `aiWhy`, `AssetPlacements.decodeTag`, `PlacementApplier.transform/keyframes`, `StudioSceneLayers.PlacedImage` |
 | Asset does not move at all | `PlacementApplier.keyframes` (needs ≥2 keys inside the scene), absolute `timeUs` vs local `tMs`, easing name not in `LayerMath`'s list |
-| Orb opens but no voice | provider is not Gemini (see section 6), `SaifAutomation.liveError`, `JarvisConversationService` connection status |
+| Orb opens but no voice | `SaifAutomation.activeEngine` (which engine ran), `LiveVoiceSessionManager.turnError` (no STT route), `SttRouter.resolveSttCandidates`, `SaifAutomation.liveError`, `JarvisConversationService` connection status |
+| Nothing heard on a non-Gemini provider | `SaifHostLiveEngine.start` return value (mic permission), `LiveVoiceManager.isLiveModeActive`, `LiveVoiceService` notification, `TTSManager` voice availability |
+| Orb shows no captions | `SaifAutomation.userTranscript`/`assistantTranscript` ← `userCaption`/`aiCaption` ← `handleUtterance`; the Gemini bridge only forwards while `activeEngine == GEMINI_LIVE` |
+| Screen share does nothing (non-Gemini) | `SaifLiveScreen.isSharing`/`hasFrame`, `SaifHostLiveEngine.startScreenShare`, and whether the provider+model accepts `base64Images` |
+| Screen share stays pending (Gemini) | `SaifAutomation.isScreenSharePending`, `connectionStatus` never reaching `LIVE`, `flushPendingScreenShare`, the 20 s timeout error |
+| Orb frozen or state jumps between engines | `SaifAutomation.activeEngine`, the `ensureGeminiBridge` guard, `SaifHostLiveEngine.engineJob` |
+| Floating bubble missing while the app is backgrounded | `SYSTEM_ALERT_WINDOW` grant, `LiveVoiceService.showOverlay`, `SaifLiveOrbBubble` (+ `onDrag`) |
 | Voice changed in Settings but not in the video | `utils/SaifVoice` (single source), `BrandKit.narrationVoice`, `DeviceSpeech` |
 | Voice cut / choppy | `VoiceGroups`, `retimeGrouped`, `NarrationPolish`, SFX ducking in `TimelineAssembler` |
 | "Scene planning failed … 404" | wrong Gemini model name in settings; change model |
 | Research shallow | `DeepResearch` note in chat; add a Tavily/Brave key for better search |
 
 ## 8. Backlog (not done yet)
-- **Provider-agnostic live engine**: a turn-based STT → `AiClient` → TTS path so the orb works without Gemini Live (see section 6).
+- Feed a real FFT (`com.jarvis.assistant.audio.AudioUtils`) into `SaifAutomation.audioFrequency` for the turn-based engine instead of the derived bass/mid/high split.
+- Streaming STT for the turn-based engine (true barge-in mid-sentence, like Gemini Live) and multi-frame screen context per turn.
+- Delete the dead `FloatingVoiceOverlay.kt` once the orb bubble has been confirmed on a device.
+- Show `SaifAutomation.activeEngine` in the live panel header so the user can see which engine answered.
 - Wire `SaifMemoryCore` into the app builder and the phone agent too (chat, live and video are done), and surface `perFeatureCounts()` in the AI MEMORY dialog.
 - Cloud TTS option for smoother voice; per-word timing alignment between narration and captions.
 - Let the Director ask the user for a Telegram sync from the chat (button) and show catalog size.
@@ -115,7 +133,48 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
-**Round 9 (this ZIP)** — three asks: (A) assets fetched **one at a time** and placed with full editor control, (B) scenes that never repeat a template, (C) all of SAIF AI AUTOMATION absorbed into the main app and the red **+** button deleted.
+**Round 10 (this ZIP)** — one ask: *"mere app ka har feature kisi bhi API par kaam kare"*. The live conversation no longer needs Gemini Live. No new engine was required — the app already contained a complete provider-agnostic turn-based live stack, it was simply unreachable from the automation feature. **Round 10 is a bridge, not a rewrite.**
+
+*The routing rule (one place: `SaifAutomation.startLive`)*
+- No API key → no engine; toast + the Settings panel opens (unchanged).
+- `SaifApiConfig.isGemini` (a Gemini key — or a blank provider, which has always defaulted to Gemini) → the full-duplex **Gemini Live WebSocket** (`JarvisConversationService`), exactly as before.
+- Any other provider (OpenAI, Anthropic, Groq, OpenRouter, Mistral, DeepSeek, custom…) → **`SaifHostLiveEngine`**: VAD (`VadGate` + `AudioPipeline`) → STT via `SttRouter` (Groq Whisper / OpenAI Whisper / Gemini, falling back across every saved key + the admin key + `GeminiKeyPool`) → the reply via `AIApiUtility.executeWithFallback` (the same gateway the chat uses) → the voice via on-device `TTSManager` (no API needed).
+
+*`SaifAutomation.kt` — the live flows are now owned, not aliases*
+- The ten live flows used to be **direct aliases** of `JarvisConversationService`'s companion flows, so they could only ever show the Gemini engine. They are now `MutableStateFlow`s owned by `SaifAutomation`.
+- `EngineKind { NONE, GEMINI_LIVE, HOST_TURN_BASED }` + `activeEngine`/`isHostEngine`; `ensureGeminiBridge()` copies the Gemini service's flows into the owned ones **only while that engine is active**, so two engines can never fight over the orb.
+- `HostLiveEngine`/`HostLiveSink` interfaces + `var hostLiveEngine`. The automation module cannot see `com.example.*` (the dependency is one-way, app→automation), so the engine is injected — the same pattern as `hostVoiceResolver`/`hostMemoryResolver`/`hostAutoLanguageResolver`. `SaifApplication` registers `SaifHostLiveEngine`.
+- `stopLive`/`setMicMuted`/`interrupt`/`sendText`/`startScreenShare`/`stopScreenShare`/`clearLiveError`/`isServiceRunning` all route to the active engine. The string-based `stateFromKey` is gone — the sink passes a real `ConversationState`, so the two sides cannot drift.
+- A turn-based engine only reports mic energy, so `hostSink.level()` also derives a proportional bass/mid/high split for the orb's audio-reactive rings (the Gemini bridge pushes the real FFT and wins while the socket engine is active).
+
+*New `app/…/SaifHostLiveEngine.kt`*
+- Reuses the **existing** `LiveVoiceService` foreground service (MICROPHONE type) through `LiveVoiceManager.startLiveVoice` — now public — so there is still exactly one mic owner and one notification.
+- Collects `engineFlow` and forwards `sessionState`/`amplitude`/`userCaption`/`aiCaption`/`turnError` into the sink; maps `VoiceSessionState{IDLE,LISTENING,PROCESSING,SPEAKING}` → `ConversationState{IDLE,LISTENING,THINKING,SPEAKING}`.
+- Checks the mic permission up front (a clear Hinglish error instead of a deaf orb); when `isLiveModeActive` goes false (closed from the notification/overlay) the flows reset.
+- `interrupt()` → `stopSpeaking(causedByUserInterruption = true)`; `sendText()` → the new `submitText`.
+
+*Screen share on any provider — new `app/…/util/SaifLiveScreen.kt`*
+- `ScreenCaptureManager` was always a standalone singleton; only `JarvisConversationService.startScreenCapture` was Gemini-gated (it needs `activeInstance` + a ready WebSocket). The host engine calls the singleton directly.
+- Frames are **not** streamed to a socket: the newest JPEG is buffered in `SaifLiveScreen`, and `LiveVoiceSessionManager` now passes `base64Images = SaifLiveScreen.frameForPrompt()` (it was `emptyList()`) to `executeWithFallback`, which already routes images to whichever provider is configured. Stale frames (>15 s) are dropped, with an on-demand `captureSnapshotJpeg` fallback.
+
+*`LiveVoiceSessionManager.kt` — additions only, the existing mic path is unchanged*
+- `processAudioTurn` was split: everything after transcription moved into `handleUtterance(text)`. The extracted body referenced **none** of the audio locals (checked before cutting), and its two `return@`s are lambda-local, so behaviour is identical. Speech and typed text now share one brain.
+- New: `submitText(rawText)`, `isMicMuted` (frames dropped before VAD), `userCaption`/`aiCaption` (the orb's two caption lines — `liveSubtitle` mixes status tokens with sentences), `turnError` (surfaces a missing STT route).
+
+*The floating window is finally replaced (requirement C's last piece)*
+- `LiveVoiceService.showOverlay()` now builds **`SaifLiveOrbBubble`** instead of `FloatingVoiceOverlay` (which had no call sites left). `SaifLiveOrbBubble` gained an optional `onDrag` — a press that moves >10 px is a drag, otherwise it is a tap-to-open — so the overlay stays draggable. The bubble reads `SaifAutomation`'s flows, so it looks identical on both engines.
+- `JarvisConversationService.beginActiveConversation` no longer refuses a non-Gemini provider with "GEMINI KEY REQUIRED" when a host engine is registered: it stops itself and delegates to `SaifAutomation.startLive`.
+
+*Bug fixed on the Gemini path as well*
+- Picking **Share screen** before the session was up used to fail silently: `startScreenCapture` rejects a projection unless the WebSocket reports `LIVE`, and it *stops* the projection it rejects. `startScreenShare` now queues the projection (`isScreenSharePending`) and the `connectionStatus` bridge hands it over the moment the socket is LIVE, with a 20 s timeout that stops the projection and reports why. The toast reads "Live session ready hote hi screen share apne aap shuru ho jayega."
+
+*Settings + tests*
+- `SaifLiveSettingsSection` gained a **Live Engine** card naming the engine the current provider will use, and stating that the language/personality pickers below belong to the Gemini Live socket.
+- New `LiveEngineRoutingTest.kt` (plain JVM, no JSON, no Android): the routing table across 12+ providers, `isGemini` spellings, the blank-provider default, no-key → no engine, and the idle-state contract of the owned flows.
+
+*Not verified here:* nothing was compiled (no JDK/Kotlin in the sandbox, and downloading one is blocked). GitHub Actions is the first real compile. The routing logic and every referenced symbol were checked by grep; runtime behaviour (mic, TTS, projection, overlay) can only be confirmed on a device.
+
+**Round 9** — three asks: (A) assets fetched **one at a time** and placed with full editor control, (B) scenes that never repeat a template, (C) all of SAIF AI AUTOMATION absorbed into the main app and the red **+** button deleted.
 
 *A. Sequential asset hunt + placement (ZERO TO VIDEO)*
 - New `studio/director/AssetHunter.kt`: `AssetFormats` (png/jpg/mp4/mp3… → kind, strict vs relaxed format matching), `HuntSlot` (one place on the timeline), `HuntNeed` (2–3 keywords + one file format, never a list), `AssetLibrary` (tenant-filtered, keyword-ranked search), `AssetHunter` (prompts + tolerant parsers + `keywordLadder` retry rungs + `seedNeed` fallback when no model can answer), `HuntSlots.build/unfilled`.

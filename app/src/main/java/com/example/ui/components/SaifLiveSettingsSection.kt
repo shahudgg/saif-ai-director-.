@@ -89,10 +89,50 @@ fun SaifLiveSettingsSection(glassBorderBrush: Brush) {
     var voiceLock by remember { mutableStateOf(prefs.isOwnerVoiceEnabled) }
     var hasVoicePrint by remember { mutableStateOf(prefs.hasOwnerVoiceProfile()) }
 
+    // Which engine the live conversation will run on with the provider saved in Settings. Live
+    // baatcheet works on EVERY API: a Gemini key uses the full-duplex Gemini Live socket, any other
+    // provider uses SAIF AI's own turn-based engine (SttRouter + the app's LLM gateway + on-device TTS).
+    val liveApi = remember { com.jarvis.assistant.SaifAutomation.currentApi() }
+    val liveEngineNote = when {
+        !liveApi.hasKey ->
+            "Koi API key nahi mili \u2014 Settings \u2794 AI Provider me key daalein, phir live baatcheet chalegi"
+        liveApi.isGemini ->
+            "Gemini Live (full-duplex socket) \u2014 provider: ${liveApi.provider.ifBlank { "Gemini" }}"
+        else ->
+            "SAIF turn-based engine \u2014 aapke provider (${liveApi.provider}) par: Groq/OpenAI/Gemini STT, " +
+                "wahi LLM gateway jo chat use karta hai, aur on-device TTS"
+    }
+
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionHeader("SAIF AI LIVE \u2022 BAATCHEET")
 
         LiveCard(glassBorderBrush) {
+            // ------------------------------------------------------------------ LIVE ENGINE
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    text = "Live Engine",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SaifTheme.colors.textPrimary
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = liveEngineNote,
+                    fontSize = 13.sp,
+                    color = SaifTheme.colors.textSecondary
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Live baatcheet kisi bhi API provider par chalti hai. Neeche ki language aur " +
+                        "personality settings Gemini Live socket ke liye hain; baaki providers par SAIF " +
+                        "apni normal voice + persona use karta hai.",
+                    fontSize = 12.sp,
+                    color = SaifTheme.colors.textSecondary
+                )
+            }
+
+            HorizontalDivider(color = SaifTheme.colors.cardBorder)
+
             // ------------------------------------------------------------------ AUTO LANGUAGE
             LiveSwitchRow(
                 title = "Auto Language",

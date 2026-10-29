@@ -15,7 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import com.example.ui.components.FloatingVoiceOverlay
+import com.example.ui.components.SaifLiveOrbBubble
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -124,14 +124,16 @@ class LiveVoiceService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedSt
             setViewTreeSavedStateRegistryOwner(this@LiveVoiceService)
             
             setContent {
-                FloatingVoiceOverlay(
-                    engine = engine,
-                    onClose = { stopSelf() },
-                    onOpenApp = {
+                // The old FloatingVoiceOverlay is gone: the floating window is now SAIF AI's own
+                // orb, driven by SaifAutomation's flows, so it looks identical whichever engine
+                // (Gemini Live socket or the provider-agnostic turn-based one) is running.
+                SaifLiveOrbBubble(
+                    onOpen = {
                         val intent = Intent(this@LiveVoiceService, MainActivity::class.java)
                         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                         startActivity(intent)
                     },
+                    onClose = { stopSelf() },
                     onDrag = { dx, dy ->
                         layoutParams.x += dx.toInt()
                         layoutParams.y += dy.toInt()

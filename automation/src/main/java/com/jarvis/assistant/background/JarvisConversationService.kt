@@ -734,6 +734,19 @@ class JarvisConversationService : Service() {
             return
         }
         if (!com.jarvis.assistant.SaifAutomation.currentApi().isGemini) {
+            // This service speaks ONLY the Gemini Live protocol. Every other provider (OpenAI,
+            // Anthropic, Groq, OpenRouter, custom...) is served by SAIF AI's own turn-based engine,
+            // so hand the session over instead of refusing it with "GEMINI KEY REQUIRED".
+            val hostEngine = com.jarvis.assistant.SaifAutomation.hostLiveEngine
+            if (hostEngine != null) {
+                Log.i("JarvisService", "Provider is not Gemini: delegating this live session to the host engine")
+                val appContext = applicationContext
+                val mode = com.jarvis.assistant.SaifAutomation.liveMode.value
+                val light = try { com.jarvis.assistant.SaifAutomation.hostLightMode } catch (_: Throwable) { false }
+                stopSelf()
+                com.jarvis.assistant.SaifAutomation.startLive(appContext, mode, light)
+                return
+            }
             _liveError.value = JarvisLiveError(
                 title = "GEMINI KEY REQUIRED",
                 message = "Live voice Gemini Live par chalti hai. SAIF AI Settings me provider Gemini chuno aur Gemini API key daalo.",

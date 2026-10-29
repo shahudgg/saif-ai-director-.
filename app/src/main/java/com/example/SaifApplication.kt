@@ -37,5 +37,14 @@ class SaifApplication : Application() {
         SaifAutomation.hostVoiceResolver = { com.example.utils.SaifVoice.liveVoiceName(this) }
         SaifAutomation.hostMemoryResolver = { feature -> com.example.util.SaifMemoryCore.promptBlock(feature) }
         SaifAutomation.hostAutoLanguageResolver = { com.example.util.SaifMemoryCore.autoLanguage.value }
+
+        // Live baatcheet must work on EVERY API provider, not only on Gemini Live.
+        //   • Gemini key        -> the automation module's own full-duplex Gemini Live WebSocket.
+        //   • any other provider -> SAIF AI's turn-based engine (this registration): SttRouter picks
+        //     Groq Whisper / OpenAI Whisper / Gemini for speech-to-text with fallbacks across every
+        //     saved key, AIApiUtility.executeWithFallback produces the reply on whichever provider is
+        //     configured, TTSManager speaks it on-device, and SaifLiveScreen hands the newest screen
+        //     frame to the model as an image instead of streaming it over a socket.
+        SaifAutomation.hostLiveEngine = SaifHostLiveEngine
     }
 }
