@@ -50,6 +50,17 @@ object SceneRenderer {
     fun parseColor(hex: String, fallback: Int = 0xFFFFFFFF.toInt()): Int =
         try { android.graphics.Color.parseColor(hex) } catch (_: Exception) { fallback }
 
+    /** Blend mode name -> PorterDuff xfermode, or null for plain drawing. Mirrors the timeline's own blend modes. */
+    fun blendXfer(name: String): android.graphics.PorterDuffXfermode? = when (name.lowercase()) {
+        "screen" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN)
+        "multiply" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.MULTIPLY)
+        "overlay" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.OVERLAY)
+        "add" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.ADD)
+        "lighten" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.LIGHTEN)
+        "darken" -> android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DARKEN)
+        else -> null
+    }
+
     fun draw(canvas: Canvas, width: Int, height: Int, g: SceneGraph, tMs: Long, durationMs: Long, opacity: Float = 1f) {
         val w = width.toFloat(); val h = height.toFloat()
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -85,17 +96,63 @@ object SceneRenderer {
             this.color = color; style = Paint.Style.STROKE; strokeWidth = max(1f, e.strokeW * min(w, h))
             strokeCap = Paint.Cap.ROUND; this.alpha = (alpha * 255).toInt()
         }
+        // Round 9: an element can carry its own blend mode, and can float/orbit on a motion path.
+        blendXfer(e.blend)?.let { xf -> fill.xfermode = xf; stroke.xfermode = xf }
+        val (pdx, pdy) = SceneFx.pathOffset(e, tMs, min(w, h))
         canvas.save()
-        canvas.translate(x, y); canvas.rotate(rot); canvas.scale(scale, scale)
+        canvas.translate(x + pdx, y + pdy); canvas.rotate(rot); canvas.scale(scale, scale)
+        // The advanced primitives are drawn by SceneFx, which also applies their glow / shadow / gradient.
+        if (SceneFx.handles(e.type)) {
+            val geo = SceneFx.Geo(ew, eh, alpha, progress, tMs, w, h, color,
+                parseColor(e.color2.ifBlank { e.color }), min(w, h))
+            SceneFx.draw(canvas, e, geo, fill, stroke)
+            canvas.restore()
+            return
+        }
         when (e.type) {
             "text" -> {
                 val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     this.color = color; this.alpha = (alpha * 255).toInt(); textSize = e.size * min(w, h) * 1.6f
-                    textAlign = Paint.Align.CENTER; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    textAlign = when (e.align) { "left" -> Paint.Align.LEFT; "right" -> Paint.Align.RIGHT; else -> Paint.Align.CENTER }
+                    typeface = SceneFx.typefaceFor(e.weight)
+                    letterSpacing = e.letterSpacing
+                    if (e.skew != 0f) textSkewX = -e.skew * 0.35f
                 }
                 val maxW = if (ew > 0) ew else w * 0.9f
                 val local = tMs - (e.anims.minOfOrNull { it.startMs } ?: 0L)
                 val shown = textFx(e, local, tMs)
+                // Round 9: the motion and focus text effects. Each one is a deterministic function of the
+                // element's own local clock, so the preview and the exporter agree frame for frame, and none of
+                // the whitelisted fx names is a silent no-op any more.
+                val intro = (local / 620f).coerceIn(0f, 1f)
+                val travel = max(eh, tp.textSize * 1.6f)
+                when (e.fx) {
+                    "rise" -> canvas.translate(0f, (1f - ease(intro, "easeOut")) * travel * 0.55f)
+                    "slide" -> canvas.translate((1f - ease(intro, "easeOut")) * max(ew, tp.textSize * 4f) * 0.6f, 0f)
+                    "pop" -> { val ps = 0.55f + 0.45f * ease(intro, "backOut"); canvas.scale(ps, ps) }
+                    "scale" -> { val ss = 1.35f - 0.35f * ease(intro, "expoOut"); canvas.scale(ss, ss) }
+                    "bounce" -> canvas.translate(0f, -(1f - ease(intro, "bounce")) * travel * 0.9f)
+                    else -> { }
+                }
+                if (e.fx == "fade") {
+                    tp.alpha = (alpha * 255f * ease(intro, "easeOut")).toInt().coerceIn(0, 255)
+                }
+                if (e.fx == "blur") {
+                    // A real blur filter needs API 31 (this module supports 26), so the text is softened with
+                    // offset low-alpha copies that tighten into focus as the line arrives.
+                    val amt = (1f - ease(intro, "easeOut")) * tp.textSize * 0.20f
+                    if (amt > 0.35f) {
+                        val bp = Paint(tp).apply { this.alpha = (alpha * 55f).toInt().coerceIn(0, 255) }
+                        val soft = wrap(shown, tp, maxW)
+                        for (k in 1..5) {
+                            val dx = amt * cos(k * 1.7f)
+                            val dy = amt * sin(k * 2.3f)
+                            soft.forEachIndexed { i, line ->
+                                canvas.drawText(line, dx, i * tp.textSize * 1.2f + dy, bp)
+                            }
+                        }
+                    }
+                }
                 if (e.fx == "glow") {
                     val gp = Paint(tp).apply { this.alpha = (alpha * 70).toInt(); style = Paint.Style.STROKE; strokeWidth = tp.textSize * 0.22f; strokeJoin = Paint.Join.ROUND }
                     wrap(shown, tp, maxW).forEachIndexed { i, line -> canvas.drawText(line, 0f, i * tp.textSize * 1.2f, gp) }
@@ -104,7 +161,24 @@ object SceneRenderer {
                     val op = Paint(tp).apply { this.color = 0xFF000000.toInt(); this.alpha = (alpha * 255).toInt(); style = Paint.Style.STROKE; strokeWidth = tp.textSize * 0.14f; strokeJoin = Paint.Join.ROUND }
                     wrap(shown, tp, maxW).forEachIndexed { i, line -> canvas.drawText(line, 0f, i * tp.textSize * 1.2f, op) }
                 }
-                if (e.fx == "words") {
+                if (e.fx == "neon") {
+                    // Three bloom passes behind the crisp text: a real neon tube, not a single blurred stroke.
+                    for (k in 3 downTo 1) {
+                        val np = Paint(tp).apply {
+                            this.alpha = (alpha * (34 + k * 12)).toInt(); style = Paint.Style.STROKE
+                            strokeWidth = tp.textSize * 0.10f * k; strokeJoin = Paint.Join.ROUND
+                        }
+                        wrap(shown, tp, maxW).forEachIndexed { i, line -> canvas.drawText(line, 0f, i * tp.textSize * 1.2f, np) }
+                    }
+                }
+                if (e.fx == "shadow3d") {
+                    val depth = (tp.textSize * 0.16f).toInt().coerceAtLeast(2)
+                    for (k in depth downTo 1) {
+                        val sp = Paint(tp).apply { color = 0xFF000000.toInt(); this.alpha = (alpha * 90).toInt() }
+                        wrap(shown, tp, maxW).forEachIndexed { i, line -> canvas.drawText(line, k.toFloat(), i * tp.textSize * 1.2f + k, sp) }
+                    }
+                }
+                if (e.fx == "words" || e.fx == "karaoke") {
                     drawWordsPop(canvas, shown, tp, maxW, local)
                 } else {
                     wrap(shown, tp, maxW).forEachIndexed { i, line -> canvas.drawText(line, 0f, i * tp.textSize * 1.2f, tp) }
@@ -112,7 +186,14 @@ object SceneRenderer {
             }
             "rect" -> {
                 val r = RectF(-ew / 2, -eh / 2, -ew / 2 + ew * progress, eh / 2)
-                canvas.drawRoundRect(r, min(ew, eh) * 0.12f, min(ew, eh) * 0.12f, fill)
+                val rad = min(ew, eh) * e.radius
+                val rp = if (e.color2.isBlank()) fill else Paint(fill).apply {
+                    val a = Math.toRadians(e.gradient.toDouble()); val len = max(ew, eh) / 2f
+                    shader = LinearGradient(-(cos(a) * len).toFloat(), -(sin(a) * len).toFloat(),
+                        (cos(a) * len).toFloat(), (sin(a) * len).toFloat(), color, parseColor(e.color2), Shader.TileMode.CLAMP)
+                }
+                if (e.outline > 0.5f) canvas.drawRoundRect(r, rad, rad, Paint(stroke).apply { strokeWidth = max(1.5f, e.strokeW * min(w, h) * 2f) })
+                else canvas.drawRoundRect(r, rad, rad, rp)
             }
             "circle" -> canvas.drawCircle(0f, 0f, min(ew, eh) / 2f * progress, if (e.strokeW > 0.02f) fill else stroke)
             "ring" -> {
@@ -352,9 +433,26 @@ object SceneRenderer {
                 val shown = if (isInt) Math.round(cur).toString() else String.format(java.util.Locale.US, "%.1f", cur)
                 e.text.replaceRange(m.range, shown)
             }
+            "scramble" -> {
+                // Characters lock in from the left while the rest keeps scrambling: a decode/hacker reveal.
+                val total = e.text.length
+                val locked = ((t / 38L).toInt()).coerceIn(0, total)
+                if (locked >= total) e.text
+                else buildString {
+                    append(e.text.take(locked))
+                    for (i in locked until total) {
+                        val c = e.text[i]
+                        append(if (c == ' ') ' ' else GLYPHS[((t / 60L + i) % GLYPHS.length).toInt().coerceAtLeast(0)])
+                    }
+                }
+            }
+            "karaoke" -> e.text
             else -> e.text
         }
     }
+
+    /** Glyph pool for the scramble reveal. */
+    private val GLYPHS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#@$%&*".toCharArray()
 
     /** Draws words one after another with a small pop, centred (used by fx = "words"). */
     private fun drawWordsPop(canvas: Canvas, text: String, tp: Paint, maxW: Float, localMs: Long) {

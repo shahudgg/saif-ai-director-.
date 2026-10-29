@@ -40,32 +40,49 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
   - `DeepResearch.kt` (planned multi-angle research, page reading, fact extraction, `SceneFacts`), `WebResearch.kt` (Tavily/Brave/Wikipedia/News RSS).
   - `ScriptPipeline.kt` (hook options → script → `ScriptCritic` review/auto-fix), `ScenePlanning.kt`, `SceneSpec.kt` (scene graph model, validator,
     `SceneTiming.retime/retimeGrouped`, `VoiceGroups`, JSON), `SceneRenderer.kt` (Canvas renderer, same for preview + export).
-  - `AssetCurator.kt` (AI asset editor prompt/parser), `AssetDirector.kt` (old keyword planner/ranker = fallback), `AssetVerifier.kt`, `TimelineAssembler.kt`
-    (+ `SceneOverlay`), `AudioTools.kt` (`DeviceSpeech` TTS, `AudioDurations`), `SfxPlanner.kt`, `BrandKit.kt`, `ProviderRegistry.kt`, `SecretBox.kt`.
+  - **Round 9:** `AssetHunter.kt` (`AssetFormats`, `HuntSlot`, `HuntNeed`, `HuntAttempt`, `HuntStep`, `AssetLibrary`, `AssetHunter` prompts/parsers, `HuntSlots`)
+    and `AssetPlacement.kt` (`AssetPlacement`, `PlacementKey`, `AssetPlacements` clamp/parse/encode/decode/defaults) — the one-at-a-time hunt and full placement control.
+    `SceneFx.kt` renders the 20 advanced primitives.
+  - `AssetCurator.kt` (AI asset editor prompt/parser — **kept but no longer called**), `AssetDirector.kt` (old keyword planner/ranker = fallback), `AssetVerifier.kt`
+    (`MediaInspector`, `AssetDecision`, `HuntVerdict`, `verifyForHunt`), `TimelineAssembler.kt` (+ `SceneOverlay`, **`PlacementApplier`**), `AudioTools.kt`
+    (`DeviceSpeech` TTS, `AudioDurations`), `SfxPlanner.kt`, `BrandKit.kt`, `ProviderRegistry.kt`, `SecretBox.kt`.
 - `studio/composer/` — local deterministic designer used only as a **per-scene safety net**: `Beat.kt`, `BeatPlanner.kt`, `SceneComposer.kt`,
-  `LayoutEngine.kt`, `SceneLint.kt`, `StyleDNA.kt` (random look per video), `CapabilityProfile.kt` (model probe).
-- `studio/render/` — `RenderPlan.kt` (z-order), `StudioFrameRenderer.kt` (shared preview/export drawing), captions. `studio/export/` — video+audio export.
+  `LayoutEngine.kt`, `SceneLint.kt` (+ **`SceneUniqueness`**, the anti-template gate), `StyleDNA.kt` (random look per video), `CapabilityProfile.kt` (model probe).
+- `studio/render/` — `RenderPlan.kt` (z-order), `StudioFrameRenderer.kt` (shared preview/export drawing), **`LayerEffects.kt`** (`destRect`, `driftTransform`,
+  `AnimPose` — the placement box, glow/blur/grade and entrance/exit), captions. `studio/export/` — video+audio export.
 - `studio/audio/` — `AudioMixer`, `NarrationPolish` (silence trim, fades), `SfxSynth`. `studio/ui/` — Compose screens (`SaifDirectorScreen`, `StudioPreviewPanel`, `StudioSceneLayers`…).
 - `ui/components/TelegramAssetManager.kt`, `TelegramCatalogStore.kt` — Telegram library (sync, caption parsing, download, ranking).
 - `llm/`, `studio/ai/` — provider-agnostic LLM client (Gemini, OpenAI, Anthropic, Groq, OpenRouter, custom). Other packages (`agent/`, `builder/`, `compiler/`, `data/`) are the rest of the app.
-- Tests: `app/src/test/java/com/example/studio/{director,composer}/`.
+- **Round 9 app-wide backends:** `utils/SaifVoice.kt` (ONE voice for chat + live + video; **SAIF ADVANCE VOICE** is the default),
+  `util/SaifMemoryCore.kt` (memory recall tagged per feature, mirrored into the automation engine's Room bank),
+  `ui/components/SaifLiveOrb.kt` (3D orb WebView + `SaifLiveConversationPanel` + `SaifLiveOrbBubble`), `ui/components/SaifLiveModeSheet.kt`
+  (Normal voice / Share screen chooser + `SaifLiveSession`), `ui/components/SaifLiveSettingsSection.kt` (merged automation settings).
+  `SaifHeader.kt` no longer has the red **+** button. The automation module is reached only through `com.jarvis.assistant.SaifAutomation`
+  (host-facing API: `LiveMode`, engine flows, `startLive`/`stopLive`/`startScreenShare`/…, and the `hostVoiceName`/`hostMemory`/`hostAutoLanguage` resolvers
+  that `SaifApplication` registers).
+- Tests: `app/src/test/java/com/example/studio/{director,composer}/` (+ Round 9: `AssetPlacementTest`, `AssetHunterTest`, `PlacementApplierTest`,
+  `SceneUniquenessTest`, `ElementClampTest`).
 
 ## 4. How ZERO TO VIDEO works now (pipeline)
 1. Question cards → brief (`DirectorBrief`). `ensureSeed()` stores a random `styleSeed` → drives palette/backdrop (`StyleDNA`), **story shape** (`StoryStyles`) and **scene layout order** (`SceneArchetypes`) so every video differs.
 2. **Research** (`DeepResearch.run`): model plans 5 search angles → search (user's Tavily/Brave key, else keyless Bing RSS + DuckDuckGo + Wikipedia + Google News) → opens top pages and extracts numbered facts (`F1…`). Digest kept in `DirectorServices.lastDigest`.
 3. **Script** (`ScriptPipeline`): hook options → script in the chosen story shape, built on the facts → `ScriptCritic` (length, hook, CTA, repetition, unsupported numbers, **too generic**) → user approves.
-4. **Scenes** (`planManifest`): `BeatPlanner.outline` splits the script at sentences/clauses; the **model designs every scene** (`sceneBatchV2`, 3 scenes per call, each with its own facts + suggested layout) and its output must pass `SceneValidator`, `SceneLint`, `LayoutEngine` (retries with the exact problem). Only a scene that still fails uses `SceneComposer`.
-5. **Narration** (`synthNarration`): consecutive scenes that belong to one sentence are voiced **as one clip** (`VoiceGroups`, `NarrationClip.groupIds`); `SceneTiming.retimeGrouped` shares the real clip length between them. Voice = app's "Kabir" profile through device TTS, silence-trimmed (`NarrationPolish`).
-6. **Assets** (`curateAssets`): the AI asset editor gets the real library listing + all scenes and returns exact picks (visual per scene, timed SFX) and a `missing` list; picks are downloaded and verified (`AssetVerifier`, vision if available). Missing items are requested on Telegram (`AssetRequester`, once per day per need). No model → old keyword matching.
-7. **Timeline** (`TimelineAssembler.assemble`): CODE scene (+ overlay mode when it has a picture/clip), VOICE (spans a whole sentence group), TEXT captions, VISUAL/VIDEO assets, AUDIO SFX. One undo step on "Add to timeline".
+4. **Scenes** (`planManifest`): `BeatPlanner.outline` splits the script at sentences/clauses; the **model designs every scene** (`sceneBatchV2`, 3 scenes per call, each with its own facts + suggested layout) and its output must pass `SceneValidator`, `SceneLint`, `LayoutEngine` **and `SceneUniqueness`** (retries with the exact problem, including "scene 5 repeats the design of scene 2"). Only a scene that still fails uses `SceneComposer`, which itself rotates 27 `SceneArchetypes`. `lastPlanNote` reports any pair of scenes that still look alike.
+5. **Narration** (`synthNarration`): consecutive scenes that belong to one sentence are voiced **as one clip** (`VoiceGroups`, `NarrationClip.groupIds`); `SceneTiming.retimeGrouped` shares the real clip length between them. Voice = the app-wide voice from `utils/SaifVoice` (**SAIF ADVANCE VOICE** by default, the same one the chat and the live conversation use) through device TTS, silence-trimmed (`NarrationPolish`). The script prompt also carries `SaifMemoryCore.promptBlock(VIDEO)`, so a repeat owner is not asked to explain their channel again.
+6. **Assets** (`huntAssets`, Round 9 — **one asset at a time**, never one big list): Telegram is synced once, `HuntSlots.build` turns the real manifest into an ordered list of places to fill (each scene's picture first, then its sound cues), and for each slot the loop runs up to 3 tries: ask for ONE need (**2–3 keywords + one file format**) → `AssetLibrary.search` (strict format first, then relaxed) → `TelegramAssetManager.downloadCandidate` → `AssetVerifier.verifyForHunt` (vision check *in the situation it will be cut into*: narration + cue time + `visualObjective`) → on reject take `betterKeywords` and search again → on accept place it and move to the next slot. A need the model says is unnecessary becomes an upload request on Telegram (`AssetRequester`, once per day per need). No model → `AssetHunter.seedNeed` (keywords from the narration). Every decision is logged in `lastHuntLog` and shown in the chat report. `curateAssets` still exists but is no longer called.
+7. **Timeline** (`TimelineAssembler.assemble`): CODE scene (+ overlay mode when it has a picture/clip), VOICE (spans a whole sentence group), TEXT captions, VISUAL/VIDEO assets, AUDIO SFX. Each asset arrives with an `AssetPlacement` (`PlacementApplier.of`) that becomes the project's own `ItemTransform` / `ItemEffects` / `TransformKeyframe` / `ItemAnimation`, so **position, size, keyframes, glow, blend, grade, corner, chroma key, entrance and exit are all editable afterwards** in the Tune inspector — nothing is locked. Video is always forced to a full-frame backdrop. One undo step on "Add to timeline".
 
 ## 5. Rendering rules that matter
 - Scene graph = JSON of whitelisted primitives (`SUPPORTED_ELEMENT_TYPES`), stored in `CodeSceneItem.htmlCode`. No generated code is executed.
-- Z-order (`RenderPlan`): CODE 10, VIDEO 20, VISUAL 30, TEXT 40, audio 50. A scene with a library asset is saved with `animationType = SCENE_OVERLAY_MARKER`, a transparent backdrop and a dark scrim, and is drawn at z 35 (above the media). Preview draws images first for overlay scenes; b-roll/pictures (`aiWhy` contains `:asset:`) are centre-cropped, user footage keeps its aspect.
+- Z-order (`RenderPlan`): CODE 10, VIDEO 20, VISUAL 30, sticker 37/38, overlay 35, TEXT 40, audio 50. A scene with a library asset is saved with `animationType = SCENE_OVERLAY_MARKER`, a transparent backdrop and a dark scrim, and is drawn above the media. Preview draws images first for overlay scenes; b-roll/pictures (`aiWhy` contains `:asset:`) are centre-cropped, user footage keeps its aspect.
+- **Placement contract (Round 9):** geometry, glow, drift, shadow, blur, vignette, corner and chroma key travel in an `@pl=` tag inside `aiWhy` (`@pl=x,y,WxH,fit,role[,glow][,rot][,op][,drift][,shd][,blr][,vig][,crn][,chromaRRGGBB:tol]`); grade and blend live in `ItemEffects` / `ItemTransform`; motion lives in `TransformKeyframe`. The renderer owns the box (`LayerEffects.destRect`), so `ItemTransform.x/y` stay 0 and act only as extra nudges. `TransformKeyframe.timeUs` is **absolute** µs while `PlacementKey.tMs` is **local** to the clip — `PlacementApplier.keyframes` adds `startUs`. The tag is data: `AssetPlacements.f2` is pinned to `Locale.US` and `decodeTag` needs exactly the 5 fields `encodeTag` writes.
+- Placement easings must use `LayerMath.evaluateEasing`'s vocabulary (linear, easeIn/Out(+quad), easeInOut, the cubic family, easeOutBack, elastic, bounce, bezierCubic). Unknown names silently fall back to linear, and `SceneSpec.SUPPORTED_EASINGS` (`overshoot`, `expoOut`, `spring`) is a **different** list used only by the scene renderer.
+- `ItemEffects` / `ItemTransform.blendMode` are consumed by `StudioFrameRenderer.drawMedia` and `SceneRenderer.blendXfer`; other bitmap paths still ignore them. Glow/blur/shadow are downscale→upscale bilinear copies, because `setShadowLayer` / `BlurMaskFilter` do nothing to `drawBitmap` on a hardware canvas, `RenderEffect` needs API 31 (minSdk is 26), and `Paint.setBlendMode` needs API 29 (so `PorterDuffXfermode` is used).
 - Voice clip `aiWhy` carries `grp=s1+s2` for grouped clips; SFX `aiWhy` carries `@offsetMs`. `retimeAfterChange` relies on both.
 
 ## 6. Known limitations (be honest about them)
-- Not compiled outside CI. Highest-risk code: export audio mux, TTS to file, the new Round-8 Kotlin (see section 9).
+- Not compiled outside CI. Highest-risk code: export audio mux, TTS to file, and the new Round-9 Kotlin (`AssetHunter`, `AssetPlacement`, `SceneFx`, `huntAssets`, `SaifLiveOrb`, `SaifMemoryCore`) — see section 9.
+- **The live conversation still speaks only the Gemini Live WebSocket protocol** (`GeminiLiveWebSocket`, gated by `SaifApiConfig.isGemini`). The orb, screen share, mic and settings all work with any provider, but with a non-Gemini provider there is no turn-based STT → `AiClient` → TTS fallback yet, so the voice session will not connect. This is the biggest remaining piece of the automation merge.
 - Narration is Android on-device TTS (needs a voice for the language), no cloud TTS/cloning. Quality depends on the device engine.
 - Telegram: bots cannot read old history; library = posts seen by the bot within 24 h of upload (sync workflow every 6 h) + posts already in the app.
 - Vision verification only on multimodal providers; otherwise technical checks only. Licences are "unverified".
@@ -76,14 +93,21 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 ## 7. Symptom → cause cheat sheet
 | Symptom | Look at |
 |---|---|
-| Videos look alike | `planManifest` log note ("beats used the local designer"); model JSON failing validation; `SceneComposer` fallback |
-| Assets never appear | notes in the chat report ("Telegram library is empty…"), `telegram_catalog/catalog.json`, `TelegramSyncReport`, bot admin/webhook, caption format |
-| Asset hidden behind graphics | `RenderPlan` z-order, `SCENE_OVERLAY_MARKER` |
+| Videos look alike | `lastPlanNote` ("N pair(s) of scenes still look similar"); `SceneUniqueness.reason`; model JSON failing validation; `SceneComposer` fallback |
+| Assets never appear | `lastHuntLog` lines in the chat report ("Telegram library is empty…", "rejected … — reason"), `telegram_catalog/catalog.json`, `TelegramSyncReport`, bot admin/webhook, caption format |
+| Same wrong asset every try | `AssetVerifier.verifyForHunt` verdict, `VisualCheck.betterKeywords`, `AssetHunter.keywordLadder` rungs, `AssetLibrary.search` `strictFormat` |
+| Asset hidden behind graphics | `RenderPlan` z-order, `SCENE_OVERLAY_MARKER`, `AssetPlacement.role` (backdrop vs sticker) |
+| Asset in the wrong place / wrong size / spins oddly | the `@pl=` tag in `aiWhy`, `AssetPlacements.decodeTag`, `PlacementApplier.transform/keyframes`, `StudioSceneLayers.PlacedImage` |
+| Asset does not move at all | `PlacementApplier.keyframes` (needs ≥2 keys inside the scene), absolute `timeUs` vs local `tMs`, easing name not in `LayerMath`'s list |
+| Orb opens but no voice | provider is not Gemini (see section 6), `SaifAutomation.liveError`, `JarvisConversationService` connection status |
+| Voice changed in Settings but not in the video | `utils/SaifVoice` (single source), `BrandKit.narrationVoice`, `DeviceSpeech` |
 | Voice cut / choppy | `VoiceGroups`, `retimeGrouped`, `NarrationPolish`, SFX ducking in `TimelineAssembler` |
 | "Scene planning failed … 404" | wrong Gemini model name in settings; change model |
 | Research shallow | `DeepResearch` note in chat; add a Tavily/Brave key for better search |
 
 ## 8. Backlog (not done yet)
+- **Provider-agnostic live engine**: a turn-based STT → `AiClient` → TTS path so the orb works without Gemini Live (see section 6).
+- Wire `SaifMemoryCore` into the app builder and the phone agent too (chat, live and video are done), and surface `perFeatureCounts()` in the AI MEMORY dialog.
 - Cloud TTS option for smoother voice; per-word timing alignment between narration and captions.
 - Let the Director ask the user for a Telegram sync from the chat (button) and show catalog size.
 - Scene thumbnails in the plan list; A/B regenerate for one scene with the model (currently local variant).
@@ -91,7 +115,38 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
-**Round 8 (this ZIP)** — fixes for "same template every time", "assets never used", "voice cuts", "weak script":
+**Round 9 (this ZIP)** — three asks: (A) assets fetched **one at a time** and placed with full editor control, (B) scenes that never repeat a template, (C) all of SAIF AI AUTOMATION absorbed into the main app and the red **+** button deleted.
+
+*A. Sequential asset hunt + placement (ZERO TO VIDEO)*
+- New `studio/director/AssetHunter.kt`: `AssetFormats` (png/jpg/mp4/mp3… → kind, strict vs relaxed format matching), `HuntSlot` (one place on the timeline), `HuntNeed` (2–3 keywords + one file format, never a list), `AssetLibrary` (tenant-filtered, keyword-ranked search), `AssetHunter` (prompts + tolerant parsers + `keywordLadder` retry rungs + `seedNeed` fallback when no model can answer), `HuntSlots.build/unfilled`.
+- New `studio/director/AssetPlacement.kt`: `AssetPlacement`/`PlacementKey` — normalized position, size, fit, role, rotation, opacity, blend, glow+colour, shadow, blur, brightness/contrast/saturation/hue, vignette, chroma key, corner, keyframes, entrance/exit animation, drift. `AssetPlacements.clamp/parse/toJson/encodeTag/decodeTag/defaultFor/referenceSize`.
+- `DirectorServices.huntAssets` replaces `curateAssets` at all three call sites: sync Telegram **once**, then per slot loop up to `AssetHunter.MAX_TRIES` (3) — ask for ONE need → search with only its 2–3 keywords in the exact format → download → `AssetVerifier.verifyForHunt` (vision check in the situation it will be cut into) → on reject adopt `betterKeywords` and retry → on accept place it and move to the next slot. `lastHuntLog` reports every decision; `lastPlanNote` reports scene-similarity collisions. `curateAssets` is kept but no longer called.
+- `AssetVerifier`: `MediaInspector.hasAlpha`, `previewJpegBase64`, `VisualCheck.betterKeywords`, `HuntVerdict`, `verifyForHunt`. `DirectorPrompts.assetMatchAt` returns `{match, score, issues, betterKeywords}`.
+- `TimelineAssembler.PlacementApplier` converts a placement into the project's own `ItemTransform`/`ItemEffects`/`TransformKeyframe`/`ItemAnimation`; geometry travels in an `@pl=` tag inside `aiWhy` so the timeline schema is unchanged and the editor's Tune inspector can still change everything.
+- Rendering: new `studio/render/LayerEffects.kt` (`destRect`, `driftTransform`, `AnimPose`, entrance/exit), `StudioFrameRenderer.drawMedia` (legacy + placement paths), `RenderPlan` sticker z 38/37 + `isSticker()`, `StudioSceneLayers.PlacedImage` + `gradeFilter`.
+- **Bugs found and fixed while writing tests:** `decodeTag` required 6 fields but `encodeTag` writes 5, so **every** placement was thrown away on project reload (guard 6→5); `encodeTag` used locale-dependent `%.2f`, so a comma-decimal locale corrupted the tag (now `Locale.US`); the preview added `p.rotation + t.rotation` while the export applied it once, so placed assets spun twice as far (preview now uses `t.rotation`, and the glow copy rotates with it).
+
+*B. Unique scenes (no templates)*
+- `SceneSpec.kt`: 20 new primitives (wave, radar, steps, table, quote, ticker, arcdial, spotlight, halftone, scanline, confetti, beam, ribbon, compare, heat, spiral, orbit, stack, badge, barcode — 40 total), 8 new text fx (scramble, slide, scale, blur, neon, shadow3d, karaoke, bounce — 17 total), 14 new per-element look fields (glow, radius, shadow, blend, gradient, skew, letterSpacing, weight, align, dash, outline, path), whitelists `SUPPORTED_ELEMENT_BLENDS/_PATHS/_WEIGHTS/_ALIGNS`, and `Element.clamped()` applied at parse.
+- New `studio/director/SceneFx.kt`: native renderer for the 20 advanced primitives (glow/shadow/gradient stamps, motion paths, weight→typeface).
+- `SceneRenderer`: `blendXfer`, blend + path offset + `SceneFx` delegation, text align/weight/letterSpacing/skew, rect radius/gradient/outline, text fx scramble/karaoke/neon/shadow3d, and the seven motion/focus fx implemented (they were whitelisted but silently did nothing).
+- `SceneLint`: `structure` (counts#palette#camera), `family` (counts), `tooSimilar` (catches "same shapes shifted a little" and "same shapes recoloured", which the old fingerprint check missed); new `SceneUniqueness.repeatsOf/reason/collisions`. `DirectorServices.planManifest` gates every scene through it and retries with the reason; `DirectorPrompts.sceneBatchV2` gained ADVANCED ELEMENTS / TEXT FX / LOOK / ORIGINALITY rules and `SceneArchetypes` grew 9 → 27.
+
+*C. Automation absorbed, red + button deleted*
+- `SaifAutomation` is now the host-facing API: `LiveMode.NORMAL/SCREEN_SHARE`, flows (`isLiveRunning`, `orbState`, `connectionStatus`, `audioLevel`, `audioFrequency`, `userTranscript`, `assistantTranscript`, `isScreenSharing`, `liveError`, `liveMode`) and `startLive/stopLive/setMicMuted/interrupt/sendText/startScreenShare/stopScreenShare/wantsScreenShare/clearLiveError/isServiceRunning`. It never opens its own screen.
+- New UI: `SaifLiveOrb.kt` (the real `orb.html` three.js orb in a WebView + `SaifLiveConversationPanel` + draggable `SaifLiveOrbBubble` replacing the old sparkle `FloatingVoiceOverlay`), `SaifLiveModeSheet.kt` (Normal voice / Share screen chooser behind the purple mic), `SaifLiveSettingsSection.kt` (merged settings).
+- **Red + button removed** from `SaifHeader.kt`; `onAutomationClick` is kept only so old callers compile and now opens the live mode sheet.
+- **SAIF ADVANCE VOICE**: new `utils/SaifVoice.kt` is the ONE voice source for chat, live baatcheet and video narration; added as the first `VoiceProfile` and the new default; `BrandKit.narrationVoice`/`DeviceSpeech`/`TTSManager`/`SaifDirectorScreen` all read it; the live engine asks the provider for the mapped name (`Puck`) via `SaifAutomation.hostVoiceName()`.
+- **Memory recall is app-wide**: new `util/SaifMemoryCore.kt` tags every fact with the feature that learned it (chat/live/video/builder/agent), mirrors into the engine's Room bank, and answers `promptBlock(feature)`. Wired into `ChatViewModel`, `AIApiUtility`, `LiveVoiceSessionManager`, `ScriptPipeline` (video) and `JarvisConversationService` (live). `DirectorController.answer` remembers channel/niche/audience/style/language.
+- **AUTO LANGUAGE** moved into the main Settings panel (`SaifMemoryCore.autoLanguage`), together with the engine's persona, silent execution, 3D-orb look, floating overlay, system permissions and owner voice-print lock. Nothing existing was removed and nothing was duplicated: API key/model stays in AI PROVIDER & MODELS, memories in AI MEMORY, export/clear in DATA & PRIVACY, theme in APPEARANCE, voice in VOICE & TTS.
+- Credit: the feature is presented as **SAIF AI • LIVE AUTOMATION ENGINE** in the app and in the automation footer, with the required "Built on JARVIS Android Assistant by Tech GPTx • TAMCL v1.0" attribution kept in the layout, `automation/README.md` and the manifest.
+- Tests added: `AssetPlacementTest`, `AssetHunterTest`, `PlacementApplierTest`, `SceneUniquenessTest`, `ElementClampTest`.
+
+*Still open (not done in this round)*
+- The live engine still speaks the **Gemini Live WebSocket** protocol and is gated by `SaifApiConfig.isGemini`; with another provider the orb connects but there is no turn-based STT → `AiClient` → TTS fallback yet.
+- Nothing here was compiled: the sandbox has no JDK/Kotlin and GitHub release assets redirect to a host that is not allowlisted. Verification was read-only (bracket balance on all 39 touched `.kt` files, every cross-module signature checked against its declaration). **GitHub Actions is the first real compile.**
+
+**Round 8** — fixes for "same template every time", "assets never used", "voice cuts", "weak script":
 - Scene design: the model now designs **every** scene (previously only for models guessed "strong"; `gemini-flash-latest` fell into the local template composer). New `sceneBatchV2` prompt with per-scene research facts, shuffled layout archetypes, quality bar; layout gate inside the retry loop.
 - Research: `DeepResearch` (planned angles, keyless search, page reading, scored fact extraction); `SceneFacts` gives each scene its facts. Script prompt: story shape per video, originality rules, `ScriptCritic` "too generic" check.
 - Assets: **AI asset editor** (`AssetCurator` + `DirectorServices.curateAssets`) matches the real library to scenes, places timed SFX, lists missing assets and requests them on Telegram; **bug fixed**: library b-roll/pictures were drawn above (export) or below (preview) an opaque scene, so they never showed together → overlay mode + z-order + centre-crop.

@@ -38,7 +38,24 @@ object SceneArchetypes {
         "a dot-grid map where a share of the dots light up to show a region or a percentage",
         "a network of nodes that light up in sequence to show how something spreads or connects",
         "a before/after pair of panels joined by an arrow, with the change in number between them",
-        "an orbit: a core icon with two rotating rings and three labelled satellites"
+        "an orbit: a core icon with two rotating rings and three labelled satellites",
+        "a radar sweep: a disc with range rings and blips that light up as the sweep passes them, plus a short callout",
+        "a gauge with a needle: a semicircular arcdial filling to a real value, the number huge in the middle",
+        "a data table: 3 columns x 3 rows of real numbers with a highlighted header row",
+        "a numbered staircase: 4 rising steps, each with its number and a two-word title",
+        "a heat map: a grid of cells shaded by value, with the two extremes labelled",
+        "a stacked composition: 3-4 bands whose heights are the real shares, each labelled",
+        "a before/after split: one box cut by a divider knob, left and right labelled, the delta in the centre",
+        "a spiral that draws itself with a fact at its centre and three markers along the arm",
+        "a flowing ribbon: 3 sine bands drifting at different speeds with one label riding the top band",
+        "a pull quote: a giant quotation mark, the quote wrapped in three lines and the speaker under it",
+        "a scrolling ticker strip of 5 short items over a halftone dot screen",
+        "a barcode motif: vertical bars of varying width with a code under them and one highlighted bar",
+        "a spotlight reveal: a moving cone of light over a dark field, one icon and one number inside it",
+        "a badge/rosette with a two-word claim inside and a small stat chip below",
+        "confetti over a giant counter number that rolls up to the real value",
+        "a volumetric light beam from the top with three facts stacked inside it",
+        "a CRT scanline readout box with 3 rows of data and a sweeping scan bar"
     )
 
     fun forScene(seed: String?, index: Int): String {
@@ -147,9 +164,14 @@ object DirectorPrompts {
         appendLine("Project: aspect ${b.aspect ?: "9:16"}, fps $fps, style ${b.style ?: "explainer"}, motion level ${b.motionLevel ?: "balanced"}. Topic: ${b.prompt.take(140)}")
         appendLine("""Schema: {"scenes":[{"id":"s1","visualObjective":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|push|whip|flash|iris|zoomBlur|glitch","transitionMs":int,"assets":[{"id":str,"kind":"image|video","description":"what a stock clip/picture for this beat must show","fallback":"procedural"}],"cues":[{"kind":"whoosh|pop|riser|hit|ding|tick|glitch","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.12,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
         appendLine("Return exactly ${batch.size} scenes, in this order, with exactly these ids. Do NOT return narration, startMs or endMs.")
-        appendLine("Element types (normalized 0..1 coords, x/y = centre): text{text,x,y,w,size,color,fx:rise|pop|fade|typewriter|words|counter|glow|outline} rect{x,y,w,h,color} circle{x,y,w,h,color} ring{x,y,w,color} donut{x,y,w,color,values:[percent 0-100]} line/arrow{x,y,x2,y2,color} bars{x,y,w,h,values,labels,color} linechart{x,y,w,h,values,color} nodes{x,y,w,h,values=[nodes per layer],color,color2} grid{x,y,w,h,count,color} particles{x,y,w,h,count,seed,color} glow{x,y,w,color} burst{x,y,w,color,count} sweep icon{x,y,w,text=chart|coin|shield|lock|bulb|clock|heart|rocket|check|warning|globe|target|brain|phone|star,color} vignette.")
-        appendLine("Each element may have anims:[{prop:x|y|w|h|alpha|scale|rotation|progress,from,to,startMs,endMs,easing:linear|easeIn|easeOut|easeInOut|overshoot|expoOut|backOut|bounce|spring}] with times relative to scene start and never later than the scene duration. Stagger entrances (each element 120-250 ms after the previous) so the scene BUILDS while the narrator speaks.")
+        appendLine("CORE ELEMENTS (normalized 0..1 coords, x/y = centre): text{text,x,y,w,size,color,fx} rect{x,y,w,h,color,radius} circle ring donut{values:[percent]} line arrow bars{values,labels} linechart nodes grid particles glow burst sweep flash glitch grain vignette icon{text=chart|coin|shield|lock|bulb|clock|heart|rocket|check|warning|globe|target|brain|phone|star}.")
+        appendLine("ADVANCED ELEMENTS — these exist so every scene can be built differently. Pick the one that really matches the idea:")
+        appendLine("  wave{values:[amplitude,harmonics]} · radar{values:[blip radii 0..1],count} · steps{count,labels} (numbered staircase of stages) · table{count=columns,labels=row-major cells} · quote{text,labels:[who]} · ticker{labels=[scrolling items]} · arcdial{values:[0-100],labels:[unit]} (gauge with needle) · spotlight · halftone{count,values} · scanline · confetti{count} · beam{values:[spread]} · ribbon{count} · compare{values:[divider 0-100],labels:[left,right]} · heat{count=columns,values:[0..1 per cell]} · spiral{values:[turns]} · orbit{count,labels} · stack{count,values,labels} (stacked composition) · badge{text,count=points} · barcode{text,count}.")
+        appendLine("TEXT FX: rise|pop|fade|typewriter|words|counter|glow|outline|scramble|neon|shadow3d|karaoke|slide|scale|bounce.")
+        appendLine("EVERY element also accepts these LOOK controls, use them like a real designer: glow 0..1 (neon bloom), shadow 0..1, blend Normal|Screen|Multiply|Overlay|Add|Lighten|Darken, color2 + gradient (angle in degrees) for a two-colour fill, radius 0..0.5 (rounded corners), dash 0..1 (dashed stroke), outline 0..1, skew -1..1, weight light|normal|bold|black, align center|left|right, letterSpacing, path sine|circle|figure8|drift|linear (the element floats on its own).")
+        appendLine("Each element may have anims:[{prop:x|y|w|h|alpha|scale|rotation|progress|value,from,to,startMs,endMs,easing:linear|easeIn|easeOut|easeInOut|overshoot|expoOut|backOut|bounce|spring|cubicInOut}] with times relative to scene start and never later than the scene duration. Stagger entrances (each element 120-250 ms after the previous) so the scene BUILDS while the narrator speaks.")
         appendLine("QUALITY BAR: a scene is rejected unless it (1) SHOWS the idea of its narration with at least 6 visible elements, (2) carries at least one real number, name or date taken from the narration or its facts, (3) has every non-thin rect holding a short label (max 4 words) whose centre is inside it and that fits, (4) has no empty block, no full-screen flat rectangle and no repeated text, (5) keeps all text inside x 0.08..0.92 and y 0.06..0.66, (6) has a glow / particles / ring / grid atmosphere plus an entrance animation on every element, (7) looks clearly different from its neighbours in layout, shapes and colours.")
+        appendLine("ORIGINALITY IS NOT OPTIONAL. Do not reuse a layout. Every scene must be designed from scratch for its own sentence, using a DIFFERENT primitive family from the scenes before it (if the previous scene was bars+cards, this one must be e.g. a radar, a gauge, a table, an orbit, a heat map, a ribbon, a staircase...). A scene that repeats an earlier scene's primitive recipe, layout or palette is REJECTED and you will be asked to redesign it. Prefer one strong custom composition per scene over several generic boxes.")
         appendLine("Use the suggested layout as a starting point; change it if the narration needs something else, but never reuse the previous scene's layout. Write on-screen text in ${b.onScreenLanguage ?: b.narrationLanguage ?: "the narration language"}; keep labels short.")
         appendLine("Optionally add one entry in assets (kind video or image) ONLY when real footage or a picture of the subject would make the beat stronger than a graphic (people, places, products, reactions); describe exactly what it must show. Add 1-3 cues where a sound belongs (whoosh at a transition, hit when a number lands, pop for list items).")
         StyleDNA.fromAnswer(b.answers["styleSeed"])?.let { d ->
@@ -185,4 +207,28 @@ object DirectorPrompts {
     fun assetMatch(description: String, sceneObjective: String): String =
         "Does this image match the needed asset? Needed: \"$description\". Scene: \"$sceneObjective\". " +
             """Reply ONLY JSON: {"match":true|false,"score":0-10,"issues":["low quality|wrong subject|unsafe|watermark|wrong aspect|text unreadable"]}"""
+
+    /**
+     * Situation-aware check used by the sequential asset hunter: the model has just downloaded ONE file and must
+     * decide whether it is really the asset this exact moment of the video needs — not merely "an image of money".
+     */
+    fun assetMatchAt(what: String, situation: String, kind: String, alreadyTried: List<String>): String = buildString {
+        appendLine("You are the asset verifier of a video editor. ONE file was just downloaded from the user's Telegram library.")
+        appendLine("The editor needs: \"$what\" (wanted format: $kind).")
+        appendLine("It will be used at this exact place in the video:")
+        appendLine(situation)
+        if (alreadyTried.isNotEmpty()) {
+            appendLine("Already rejected for this place: ${alreadyTried.take(4).joinToString(" | ") { it.take(60) }}")
+            appendLine("Do not accept another file that has the same problem.")
+        }
+        appendLine()
+        appendLine("Look at the file and judge ONLY whether it can be cut into this moment of this video:")
+        appendLine("- Is the SUBJECT right (the thing/person/action the narration is talking about at this moment)?")
+        appendLine("- Is it usable technically: in focus, not a tiny thumbnail, no watermark, no burned-in subtitles or channel logo, not a screenshot of a chat, not a contact sheet or a collage of many pictures?")
+        appendLine("- Would a viewer understand it in under one second, with no explanation?")
+        appendLine("- Is the content safe (no nudity, gore, hate symbols, real private documents)?")
+        appendLine("Be strict. A loosely related file is a rejection: score it below 6. Only accept when you would cut it in yourself.")
+        appendLine("""Reply ONLY this JSON: {"match":true|false,"score":0-10,"issues":["wrong subject|watermark|low quality|collage|subtitles|unreadable|wrong aspect|unsafe|too short"],"betterKeywords":["two","three"]}""")
+        appendLine("betterKeywords: only when match=false — 2 or 3 different search words that would find the right file in this library.")
+    }
 }

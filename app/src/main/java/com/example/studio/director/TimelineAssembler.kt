@@ -4,11 +4,14 @@ import com.example.studio.model.AudioItem
 import com.example.studio.model.CodeSceneItem
 import com.example.studio.model.ImageItem
 import com.example.studio.model.ItemAnimation
+import com.example.studio.model.ItemEffects
+import com.example.studio.model.ItemTransform
 import com.example.studio.model.StudioLane
 import com.example.studio.model.StudioProject
 import com.example.studio.model.TextItem
 import com.example.studio.model.TimelineItem
 import com.example.studio.model.TrackType
+import com.example.studio.model.TransformKeyframe
 import com.example.studio.model.VideoItem
 import com.example.studio.model.VoiceItem
 import java.util.UUID
@@ -21,7 +24,16 @@ data class NarrationClip(val sceneId: String, val uri: String, val durationMs: L
 data class ResolvedAsset(val sceneId: String, val requestId: String, val kind: String, val localPath: String,
                          val source: String, val verified: Boolean, val note: String = "",
                          /** Where inside the scene the asset starts and how long it plays (0 = whole scene). Used for sound effects. */
-                         val atMs: Long = 0L, val durMs: Long = 0L)
+                         val atMs: Long = 0L, val durMs: Long = 0L,
+                         /** File extension of the downloaded asset (png, jpg, mp4, mp3...), used to pick the right default placement. */
+                         val ext: String = "",
+                         /** True when the picture has a transparent background (PNG/WebP), so it is placed as a sticker, not a backdrop. */
+                         val transparent: Boolean = false,
+                         /**
+                          * FULL placement control: position, size, fit, keyframes, glow, blend, grade, corner and
+                          * entrance/exit animation. Null = the assembler picks a sensible default for the file type.
+                          */
+                         val placement: AssetPlacement? = null)
 data class FootageRange(val sourceUri: String, val sourceInMs: Long, val sourceOutMs: Long, val width: Int, val height: Int, val why: String)
 
 /** Turns a normal scene into an overlay that sits ABOVE b-roll/pictures: transparent backdrop plus a soft dark scrim. */
@@ -38,6 +50,87 @@ object SceneOverlay {
         "hit" -> 0.42f; "whoosh" -> 0.36f; "riser" -> 0.28f; "ding" -> 0.30f; "glitch" -> 0.28f
         "pop" -> 0.34f; "tick" -> 0.24f; "click" -> 0.28f; "typing" -> 0.26f; else -> 0.32f
     }
+}
+
+/**
+ * Converts an [AssetPlacement] (normalized, aspect-independent) into the project's own timeline values, so the
+ * asset lands on the timeline with FULL control that the editor's Tune inspector can still change afterwards:
+ * position, size, fit, rotation, opacity, blend mode, neon glow, drop shadow, blur, brightness, contrast,
+ * saturation, hue, vignette, chroma key, rounded corner, motion keyframes and entrance/exit animation.
+ *
+ * The geometry (x, y, w, h, fit, role) travels in the `@pl=` tag inside `aiWhy`; the look travels in
+ * `ItemEffects`, `ItemTransform` and `TransformKeyframe`, all of which the project codec already persists.
+ */
+object PlacementApplier {
+
+    /** Final placement for one resolved asset: the model's explicit one, or a sensible default for the file type. */
+    fun of(a: ResolvedAsset, aspect: String?, sceneDurationMs: Long): AssetPlacement {
+        val fallback = AssetPlacements.defaultFor(a.kind, a.ext, a.transparent, aspect)
+        val p = AssetPlacements.clamp(a.placement ?: fallback)
+        // A clip is never a small sticker: the preview plays video full-frame, so keep clips as backdrops.
+        val safe = if (a.kind == "video") p.copy(role = "backdrop", width = 1f, height = 1f, fit = "cover") else p
+        return AssetPlacements.clamp(safe.copy(keyframes = AssetPlacements.sanitizeKeys(safe.keyframes, sceneDurationMs)))
+    }
+
+    fun effects(p: AssetPlacement): ItemEffects = ItemEffects(
+        neonGlow = p.glow,
+        neonColorHex = hexToLong(p.glowColor, 0xFF00E5FF),
+        dropShadow = p.shadow,
+        blur = p.blur,
+        brightness = p.brightness,
+        contrast = p.contrast,
+        saturation = p.saturation,
+        hue = p.hue,
+        vignette = p.vignette,
+        chromaKey = p.chromaKey
+    )
+
+    /** Base transform. Position and size live in the placement box, so the base offset is zero. */
+    fun transform(p: AssetPlacement): ItemTransform =
+        ItemTransform(x = 0f, y = 0f, scale = 1f, rotation = p.rotation, opacity = p.opacity, blendMode = p.blend)
+
+    /** Motion keyframes in absolute timeline microseconds; x/y are pixel offsets from the placement centre. */
+    fun keyframes(p: AssetPlacement, startUs: Long, aspect: String?): List<TransformKeyframe> {
+        if (p.keyframes.size < 2) return emptyList()
+        val ref = AssetPlacements.referenceSize(aspect)
+        return p.keyframes.map { k ->
+            TransformKeyframe(
+                timeUs = startUs + k.tMs * 1000L,
+                x = (k.x - p.x) * ref.first,
+                y = (k.y - p.y) * ref.second,
+                scale = k.scale,
+                rotation = k.rotation,
+                opacity = k.opacity
+            )
+        }
+    }
+
+    fun animIn(p: AssetPlacement): ItemAnimation? =
+        if (p.animIn == "none" || p.animIn.isBlank() || p.animInMs <= 0L) null
+        else ItemAnimation(p.animIn, p.animInMs * 1000L, "easeOut")
+
+    fun animOut(p: AssetPlacement): ItemAnimation? =
+        if (p.animOut == "none" || p.animOut.isBlank() || p.animOutMs <= 0L) null
+        else ItemAnimation(p.animOut, p.animOutMs * 1000L, "easeIn")
+
+    /** One-line description of the placement for the chat report and the item's tooltip. */
+    fun describe(p: AssetPlacement): String = buildString {
+        append(if (p.isBackdrop) "backdrop" else "sticker")
+        append(" ${"%.0f".format(p.x * 100)}%,${"%.0f".format(p.y * 100)}%")
+        if (!p.isBackdrop) append(" ${"%.0f".format(p.width * 100)}x${"%.0f".format(p.height * 100)}%")
+        append(" ${p.fit}")
+        if (p.glow > 0.01f) append(" glow${"%.0f".format(p.glow * 100)}%")
+        if (p.keyframes.size >= 2) append(" ${p.keyframes.size} keyframes")
+        if (p.animIn != "none") append(" in:${p.animIn}")
+        if (p.animOut != "none") append(" out:${p.animOut}")
+        if (p.blend != "Normal") append(" blend:${p.blend}")
+    }
+
+    private fun hexToLong(s: String, fallback: Long): Long = try {
+        val clean = s.removePrefix("#")
+        val v = java.lang.Long.parseLong(clean, 16)
+        if (clean.length == 6) 0xFF000000L or v else v
+    } catch (_: Exception) { fallback }
 }
 
 object TimelineAssembler {
@@ -84,8 +177,14 @@ object TimelineAssembler {
             if (dur <= 0) { problems += "Scene ${s.id}: invalid duration"; return@forEach }
             val tr = if (s.transitionIn == "none") null else ItemAnimation(s.transitionIn, us(s.transitionMs.coerceAtMost(s.durationMs / 2)))
 
-            // A usable picture/clip behind the scene: the scene becomes an overlay (transparent backdrop) drawn above the media.
-            val hasBackdrop = assets.any { it.sceneId == s.id && (it.kind == "image" || it.kind == "video" || it.kind == "overlay") && it.localPath.isNotBlank() && (it.verified || it.note.isNotBlank()) }
+            // Resolve every media asset of this scene to its FULL placement first, so the scene knows whether it has
+            // to become a transparent overlay (a backdrop picture) or stay opaque (stickers only, drawn above it).
+            val sceneAssets = assets.filter { it.sceneId == s.id && it.localPath.isNotBlank() && (it.verified || it.note.isNotBlank()) }
+            val placed: List<Pair<ResolvedAsset, AssetPlacement>> = sceneAssets
+                .filter { a -> a.kind == "image" || a.kind == "video" || a.kind == "overlay" }
+                .map { a -> a to PlacementApplier.of(a, aspect ?: p.aspect, s.durationMs) }
+            // A usable picture/clip BEHIND the scene: the scene becomes an overlay (transparent backdrop) drawn above the media.
+            val hasBackdrop = placed.any { it.second.isBackdrop }
             s.graph?.let { g ->
                 val gg = if (hasBackdrop) SceneOverlay.apply(g) else g
                 items += CodeSceneItem(UUID.randomUUID().toString(), codeLane, start, dur, title = s.visualObjective.take(40).ifBlank { "Scene ${s.id}" },
@@ -96,10 +195,26 @@ object TimelineAssembler {
                 if (a.localPath.isBlank() || !a.verified && a.note.isBlank()) { problems += "Scene ${s.id}: asset ${a.requestId} has no usable file"; return@forEach }
                 val uri = if (a.localPath.contains("://")) a.localPath else "file://${a.localPath}"
                 when (a.kind) {
-                    "image", "overlay" -> items += ImageItem(UUID.randomUUID().toString(), visLane, start, dur, uri, label = "Asset ${a.requestId}",
-                        animIn = tr, origin = "ai", aiWhy = why(s.id, "asset", "${a.source}; ${a.note}".take(100)))
-                    "video" -> items += VideoItem(UUID.randomUUID().toString(), videoLane, start, dur, uri, sourceOutUs = dur, label = "B-roll ${a.requestId}",
-                        volume = 0f, animIn = tr, origin = "ai", aiWhy = why(s.id, "asset", "${a.source}; ${a.note}".take(100)))
+                    "image", "overlay", "video" -> {
+                        // Full placement: geometry, grade, glow, blend, keyframes and entrance/exit animation.
+                        val pl = placed.firstOrNull { it.first === a }?.second ?: PlacementApplier.of(a, aspect ?: p.aspect, s.durationMs)
+                        val fx = PlacementApplier.effects(pl)
+                        val tf = PlacementApplier.transform(pl)
+                        val kf = PlacementApplier.keyframes(pl, start, aspect ?: p.aspect)
+                        val inAnim = PlacementApplier.animIn(pl) ?: tr
+                        val outAnim = PlacementApplier.animOut(pl)
+                        val tag = AssetPlacements.encodeTag(pl)
+                        val note = "${a.source}; ${a.note}".take(90)
+                        if (a.kind == "video") {
+                            items += VideoItem(UUID.randomUUID().toString(), videoLane, start, dur, uri, sourceOutUs = dur, label = "B-roll ${a.requestId}",
+                                volume = 0f, transform = tf, effects = fx, animIn = inAnim, animOut = outAnim, keyframes = kf, origin = "ai",
+                                aiWhy = why(s.id, "asset", "$note $tag").take(150))
+                        } else {
+                            items += ImageItem(UUID.randomUUID().toString(), visLane, start, dur, uri, label = "Asset ${a.requestId}",
+                                transform = tf, effects = fx, animIn = inAnim, animOut = outAnim, keyframes = kf, origin = "ai",
+                                aiWhy = why(s.id, "asset", "$note $tag").take(150))
+                        }
+                    }
                     "audio" -> {
                         val off = a.atMs.coerceIn(0L, (s.durationMs - 100L).coerceAtLeast(0L))
                         val len = if (a.durMs > 0L) minOf(a.durMs, 6000L) else (s.durationMs - off)

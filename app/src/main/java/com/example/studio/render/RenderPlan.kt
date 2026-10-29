@@ -21,6 +21,12 @@ data class RenderPlan(
     val activeAudioItems: List<TimelineItem>
 ) {
     companion object {
+        /** True when a media layer carries a placement tag that puts it above the generated graphics (a sticker/PNG). */
+        private fun isSticker(aiWhy: String?): Boolean {
+            val p = com.example.studio.director.AssetPlacements.of(aiWhy) ?: return false
+            return !p.isBackdrop
+        }
+
         /**
          * Pure deterministic layer plan resolver at timestamp [tUs].
          * Single source of truth consumed by BOTH preview and exporter.
@@ -60,8 +66,9 @@ data class RenderPlan(
                 val zIndex = when (item.trackType) {
                     // Scenes built over a library picture/clip are drawn above the media so both are visible together.
                     TrackType.CODE -> if (item is com.example.studio.model.CodeSceneItem && item.animationType == com.example.studio.director.SCENE_OVERLAY_MARKER) 35 else 10
-                    TrackType.VIDEO -> 20
-                    TrackType.VISUAL -> 30
+                    // A sticker/PNG the director placed as a small element sits ABOVE the graphics; a backdrop stays below.
+                    TrackType.VISUAL -> if (isSticker(item.aiWhy)) 38 else 30
+                    TrackType.VIDEO -> if (isSticker(item.aiWhy)) 37 else 20
                     TrackType.TEXT -> 40
                     TrackType.VOICE -> 50
                     TrackType.AUDIO -> 50

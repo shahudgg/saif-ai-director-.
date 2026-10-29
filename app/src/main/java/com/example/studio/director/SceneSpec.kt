@@ -14,10 +14,33 @@ val SUPPORTED_ELEMENT_TYPES = setOf(
     // visual-effect primitives (all procedural, deterministic functions of time)
     "glow", "vignette", "grain", "sweep", "flash", "glitch", "burst", "donut",
     // topic glyph: Element.text names it (chart, coin, shield, lock, bulb, clock, heart, rocket, check, warning, globe, target, brain, phone, star)
-    "icon"
+    "icon",
+    // ADVANCED primitives (Round 9): each one is a different way of showing information, so two scenes never
+    // fall back on the same handful of shapes. All are deterministic functions of time - no code is executed.
+    "wave",          // animated sine/area wave, values = amplitude per harmonic
+    "radar",         // sweeping radar disc with blips (values = blip radii 0..1)
+    "steps",         // numbered staircase of steps, labels = step titles
+    "table",         // rows x columns data table, labels = cells (row-major), values = column weights
+    "quote",         // big quotation mark + wrapped quote text + attribution in labels[0]
+    "ticker",        // horizontally scrolling strip of labels (stock-ticker style)
+    "arcdial",       // semicircular gauge with a needle and a value in values[0] (0..100)
+    "spotlight",     // moving cone of light that reveals what is under it
+    "halftone",      // dot-screen shading whose dot size follows values
+    "scanline",      // CRT scan / data-readout sweep over a box
+    "confetti",      // falling paper pieces (celebration beat)
+    "beam",          // volumetric light beam / god-ray from a point
+    "ribbon",        // flowing 3D-ish ribbon band along a sine path
+    "compare",       // two-sided before/after split with a draggable divider and a delta
+    "heat",          // heat-map grid of cells coloured from values
+    "spiral",        // fibonacci/archimedes spiral that draws itself
+    "orbit",         // a core with satellites travelling on elliptical orbits
+    "stack",         // stacked-area / layered bands showing composition
+    "badge",         // shield/rosette badge with a short label and a star
+    "barcode"       // vertical bars of varying width (data/ID motif)
 )
 /** Text effects for type "text" through Element.fx. */
-val SUPPORTED_TEXT_FX = setOf("", "rise", "pop", "fade", "typewriter", "words", "counter", "glow", "outline")
+val SUPPORTED_TEXT_FX = setOf("", "rise", "pop", "fade", "typewriter", "words", "counter", "glow", "outline",
+    "scramble", "slide", "scale", "blur", "neon", "shadow3d", "karaoke", "bounce")
 val SUPPORTED_ANIM_PROPS = setOf("x", "y", "w", "h", "alpha", "scale", "rotation", "progress", "value")
 val SUPPORTED_EASINGS = setOf("linear", "easeIn", "easeOut", "easeInOut", "overshoot", "expoOut", "backOut", "bounce", "spring", "cubicInOut")
 val SUPPORTED_TRANSITIONS = setOf(
@@ -39,8 +62,65 @@ data class Element(
     val values: List<Float> = emptyList(), val labels: List<String> = emptyList(),
     val x2: Float = 0f, val y2: Float = 0f, val count: Int = 0, val seed: Int = 1,
     val anims: List<Anim> = emptyList(),
-    /** Text effect (see SUPPORTED_TEXT_FX): typewriter, words, counter, glow, outline. */
-    val fx: String = ""
+    /** Text effect (see SUPPORTED_TEXT_FX): typewriter, words, counter, glow, outline, scramble, neon, karaoke... */
+    val fx: String = "",
+    // ---- Round 9: per-element look controls, all optional and all clamped by [SceneValidator] ----
+    /** 0..1 neon bloom drawn around the element (0 = off). */
+    val glow: Float = 0f,
+    /** 0..1 rounded-corner radius as a fraction of the shortest side (rect, badge, table cells). */
+    val radius: Float = 0.12f,
+    /** 0..1 drop shadow under the element. */
+    val shadow: Float = 0f,
+    /** Blend mode of the element over what is already drawn. */
+    val blend: String = "Normal",
+    /** Two-colour gradient angle in degrees (0 = left to right) when color2 is set. */
+    val gradient: Float = 0f,
+    /** -1..1 horizontal shear, for italic/kinetic type. */
+    val skew: Float = 0f,
+    /** Letter spacing as a fraction of the text size. */
+    val letterSpacing: Float = 0f,
+    /** Text/shape weight: "light", "normal", "bold", "black". */
+    val weight: String = "bold",
+    /** Text horizontal alignment inside the box: "center", "left", "right". */
+    val align: String = "center",
+    /** 0..1 dash pattern for strokes (0 = solid). */
+    val dash: Float = 0f,
+    /** 0..1 opacity of the element's own outline (0 = filled only, 1 = outline only). */
+    val outline: Float = 0f,
+    /** Free-form motion path for orbiting/floating elements: "linear", "sine", "circle", "figure8", "drift". */
+    val path: String = ""
+)
+
+/** Blend modes an element may use (mirrors the timeline's `ItemTransform.blendMode`). */
+val SUPPORTED_ELEMENT_BLENDS = setOf("Normal", "Screen", "Multiply", "Overlay", "Add", "Lighten", "Darken")
+/** Motion paths for floating/orbiting elements. */
+val SUPPORTED_ELEMENT_PATHS = setOf("", "linear", "sine", "circle", "figure8", "drift")
+/** Text/shape weights. */
+val SUPPORTED_ELEMENT_WEIGHTS = setOf("light", "normal", "bold", "black")
+/** Text alignments inside the element box. */
+val SUPPORTED_ELEMENT_ALIGNS = setOf("center", "left", "right")
+
+/**
+ * Every number a model can send is clamped here, once, so a nonsense reply can never push an element outside the
+ * frame, make a stroke invisible, or ask the renderer for a billion particles.
+ */
+fun Element.clamped(): Element = copy(
+    x = x.coerceIn(-0.5f, 1.5f), y = y.coerceIn(-0.5f, 1.5f),
+    w = w.coerceIn(0f, 3f), h = h.coerceIn(0f, 3f),
+    size = size.coerceIn(0.005f, 0.4f), strokeW = strokeW.coerceIn(0f, 0.08f),
+    x2 = x2.coerceIn(-0.5f, 1.5f), y2 = y2.coerceIn(-0.5f, 1.5f),
+    count = count.coerceIn(0, 240), seed = if (seed == 0) 1 else seed,
+    glow = glow.coerceIn(0f, 1f), radius = radius.coerceIn(0f, 0.5f), shadow = shadow.coerceIn(0f, 1f),
+    blend = if (blend in SUPPORTED_ELEMENT_BLENDS) blend else "Normal",
+    skew = skew.coerceIn(-1f, 1f), letterSpacing = letterSpacing.coerceIn(-0.1f, 0.6f),
+    weight = if (weight in SUPPORTED_ELEMENT_WEIGHTS) weight else "bold",
+    align = if (align in SUPPORTED_ELEMENT_ALIGNS) align else "center",
+    dash = dash.coerceIn(0f, 1f), outline = outline.coerceIn(0f, 1f),
+    path = if (path in SUPPORTED_ELEMENT_PATHS) path else "",
+    values = if (values.size > 40) values.take(40) else values,
+    labels = if (labels.size > 40) labels.take(40) else labels,
+    anims = if (anims.size > 14) anims.take(14) else anims,
+    text = if (text.length > 280) text.take(280) else text
 )
 
 data class CameraMove(
@@ -296,8 +376,20 @@ object SceneJson {
             val x = a.getJSONObject(k)
             Anim(x.optString("prop", "alpha"), x.optDouble("from", 0.0).toFloat(), x.optDouble("to", 1.0).toFloat(),
                 x.optLong("startMs", 0L), x.optLong("endMs", 500L), x.optString("easing", "easeOut"))
-        } } ?: emptyList()
-    )
+        } } ?: emptyList(),
+        glow = o.optDouble("glow", 0.0).toFloat().coerceIn(0f, 1f),
+        radius = o.optDouble("radius", 0.12).toFloat().coerceIn(0f, 0.5f),
+        shadow = o.optDouble("shadow", 0.0).toFloat().coerceIn(0f, 1f),
+        blend = o.optString("blend", "Normal").ifBlank { "Normal" },
+        gradient = o.optDouble("gradient", 0.0).toFloat(),
+        skew = o.optDouble("skew", 0.0).toFloat().coerceIn(-1f, 1f),
+        letterSpacing = o.optDouble("letterSpacing", 0.0).toFloat().coerceIn(-0.1f, 0.6f),
+        weight = o.optString("weight", "bold").ifBlank { "bold" },
+        align = o.optString("align", "center").ifBlank { "center" },
+        dash = o.optDouble("dash", 0.0).toFloat().coerceIn(0f, 1f),
+        outline = o.optDouble("outline", 0.0).toFloat().coerceIn(0f, 1f),
+        path = o.optString("path", "")
+    ).clamped()
 
     // ---- serialization (round-trips through CodeSceneItem.htmlCode so old projects keep loading) ----
 
@@ -321,6 +413,19 @@ object SceneJson {
         put("anims", JSONArray().apply { e.anims.forEach { a -> put(JSONObject().apply {
             put("prop", a.prop); put("from", a.from.toDouble()); put("to", a.to.toDouble())
             put("startMs", a.startMs); put("endMs", a.endMs); put("easing", a.easing) }) } })
+        // Round-9 look controls. Defaults are skipped so old projects stay byte-identical.
+        if (e.glow > 0f) put("glow", e.glow.toDouble())
+        if (e.radius != 0.12f) put("radius", e.radius.toDouble())
+        if (e.shadow > 0f) put("shadow", e.shadow.toDouble())
+        if (e.blend != "Normal") put("blend", e.blend)
+        if (e.gradient != 0f) put("gradient", e.gradient.toDouble())
+        if (e.skew != 0f) put("skew", e.skew.toDouble())
+        if (e.letterSpacing != 0f) put("letterSpacing", e.letterSpacing.toDouble())
+        if (e.weight != "bold") put("weight", e.weight)
+        if (e.align != "center") put("align", e.align)
+        if (e.dash > 0f) put("dash", e.dash.toDouble())
+        if (e.outline > 0f) put("outline", e.outline.toDouble())
+        if (e.path.isNotBlank()) put("path", e.path)
     }
 
     /** Stored payload: marker line + JSON so it can live in CodeSceneItem.htmlCode. */

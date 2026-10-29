@@ -579,7 +579,11 @@ The video timeline has been assembled with multi-track clips, audio BGM, sound e
 
             // Learn and retain user facts into long-term memory
             try {
-                com.example.util.SmartConversationMemory.extractAndSaveFacts(effectivePrompt, finalContent)
+                com.example.util.SaifMemoryCore.learn(
+                    com.example.util.SaifMemoryCore.Features.CHAT,
+                    effectivePrompt,
+                    finalContent
+                )
             } catch (ignored: Exception) {}
             
             // Trigger TTS if Auto Speak is enabled

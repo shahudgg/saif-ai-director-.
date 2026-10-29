@@ -91,6 +91,24 @@ data class VoiceProfile(
 )
 
 val VOICE_PROFILES = listOf(
+    // Round 9: the voice of SAIF AI AUTOMATION, brought into the main app as the DEFAULT voice everywhere
+    // (chat replies, live baatcheet and video narration all read the same setting - see utils/SaifVoice.kt).
+    VoiceProfile(
+        id = "SaifAdvance",
+        name = "SAIF ADVANCE VOICE",
+        description = "SAIF AI ki apni advance awaaz — warm, smart aur natural (Hindi & English). Live baatcheet, chat aur video narration sab isi me.",
+        emotion = "\u2728 Warm & Intelligent",
+        gender = "Male",
+        pitch = 1.00f,
+        speechRate = 1.00f,
+        previewHinglish = "Namaste! Mai SAIF Advance Voice hoon. Aapke saath naturally baat karunga, screen bhi dekh sakta hoon, aur video bhi bana sakta hoon.",
+        previewEnglish = "Hello, I am the SAIF Advance Voice. Natural, warm and ready to talk, watch your screen or build your video.",
+        // Best natural Indian voices first; the live engine asks a Gemini-Live provider for "Puck" instead.
+        targetEngineNameMatches = listOf(
+            "en-in-x-end-network", "en-in-x-ene-local", "hi-in-x-hia-network", "hi-in-x-hia-local",
+            "en-in-x-cxx-network", "en_in", "hi_in"
+        )
+    ),
     VoiceProfile(
         id = "Kabir",
         name = "Kabir",
@@ -141,9 +159,9 @@ fun SettingsSheet(
     var wakeWordSavedFeedback by remember { mutableStateOf(false) }
     var wakeWordPresets by remember { mutableStateOf(com.example.util.WakeWordManager.getPresets(context)) }
 
-    var selectedVoiceId by remember { 
-        val saved = prefs.getString("selected_voice_id", "Kabir") ?: "Kabir"
-        mutableStateOf(if (saved == "Priya") "Priya" else "Kabir")
+    var selectedVoiceId by remember {
+        // One voice for the whole app: chat, live baatcheet and video narration (see utils/SaifVoice.kt).
+        mutableStateOf(com.example.utils.SaifVoice.selectedId(context))
     }
     var ttsVoices by remember { mutableStateOf(VOICE_PROFILES) }
     var ttsInstance by remember { mutableStateOf<android.speech.tts.TextToSpeech?>(null) }
@@ -748,9 +766,9 @@ fun SettingsSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                SectionHeader("VOICE & TTS (पुरुष आवाज)", modifier = Modifier.padding(bottom = 0.dp))
+                SectionHeader("VOICE & TTS (SAIF ADVANCE VOICE)", modifier = Modifier.padding(bottom = 0.dp))
                 Text(
-                    text = "6 Male Voices Available",
+                    text = "${VOICE_PROFILES.size} AI Voices \u2022 Default: SAIF ADVANCE VOICE",
                     fontSize = 11.sp,
                     color = Color(0xFFA855F7)
                 )
@@ -880,6 +898,8 @@ fun SettingsSheet(
                                 .clickable {
                                     selectedVoiceId = voice.id
                                     prefs.edit().putString("selected_voice_id", voice.id).apply()
+                                    // Keep the video director and the live engine on the same voice.
+                                    com.example.utils.SaifVoice.select(context, voice.id)
                                 }
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -1028,6 +1048,12 @@ fun SettingsSheet(
             }
 
             Spacer(modifier = Modifier.height(24.dp))
+
+            // Round 9: SAIF AI AUTOMATION's own settings live here now (auto language, persona, silent execution,
+            // 3D orb, floating overlay, permissions, owner voice lock). Nothing below repeats an existing section:
+            // the API key stays in AI PROVIDER & MODELS, the memories stay in AI MEMORY, the theme stays in
+            // APPEARANCE and the voice stays in VOICE & TTS.
+            SaifLiveSettingsSection(glassBorderBrush)
 
             // Data & Privacy
             SectionHeader("DATA & PRIVACY")

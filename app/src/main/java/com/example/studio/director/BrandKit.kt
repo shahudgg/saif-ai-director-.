@@ -19,7 +19,10 @@ object BrandKit {
     fun autoSfx(c: Context): Boolean = p(c).getBoolean("autoSfx", true)
     fun setAutoSfx(c: Context, on: Boolean) { p(c).edit().putBoolean("autoSfx", on).apply() }
 
-    /** Voice used for every generated narration. Defaults to the app's own Kabir voice. */
-    fun narrationVoice(c: Context): String = p(c).getString("voice", "Kabir")?.takeIf { it == "Kabir" || it == "Priya" } ?: "Kabir"
-    fun setNarrationVoice(c: Context, v: String) { p(c).edit().putString("voice", v).apply() }
+    /**
+     * Voice used for every generated narration. This is the SAME voice the user picked in the main Settings panel
+     * (default: SAIF ADVANCE VOICE) - the director no longer keeps its own separate voice choice.
+     */
+    fun narrationVoice(c: Context): String = com.example.utils.SaifVoice.narrationVoiceId(c)
+    fun setNarrationVoice(c: Context, v: String) { com.example.utils.SaifVoice.select(c, v) }
 }

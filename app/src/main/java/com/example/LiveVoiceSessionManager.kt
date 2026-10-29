@@ -21,6 +21,7 @@ import com.example.util.DeviceAction
 import com.example.util.DeviceActionManager
 import com.example.util.DeviceActionParser
 import com.example.util.SaifAccessibilityService
+import com.example.util.SaifMemoryCore
 import com.example.util.SmartConversationMemory
 import com.example.utils.TTSManager
 import kotlinx.coroutines.*
@@ -306,7 +307,9 @@ class LiveVoiceSessionManager(
             }
 
             // Save facts to Smart Conversation Memory
-            SmartConversationMemory.extractAndSaveFacts(cleanUtterance)
+            // App-wide memory: facts learned while talking are tagged "live" and are remembered by the chat,
+            // the video director and the builder too (see util/SaifMemoryCore).
+            SaifMemoryCore.learn(SaifMemoryCore.Features.LIVE, cleanUtterance)
 
             // Save user message to Room DB
             val db = SaifDatabase.getDatabase(context)
@@ -438,7 +441,7 @@ class LiveVoiceSessionManager(
                 Pair(if (entity.role == "user") "user" else "model", entity.content)
             }
 
-            val memoryBlock = SmartConversationMemory.buildMemoryPromptBlock()
+            val memoryBlock = SaifMemoryCore.promptBlock(SaifMemoryCore.Features.LIVE)
             val service = SaifAccessibilityService.instance
             val activeApp = service?.getCurrentAppLabel(context) ?: "Home Screen"
             val currentPkg = service?.getCurrentPackage() ?: ""

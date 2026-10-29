@@ -156,6 +156,24 @@ class DirectorController(
     init { if (_ui.value.turns.isEmpty()) greet() else if (_ui.value.working) update { copy(working = false, status = null) } }
 
     private fun update(f: DirectorUi.() -> DirectorUi) { _ui.value = _ui.value.f(); store.save(projectId, _ui.value) }
+    /** Long-lived facts about the owner's channel. Everything else (a one-off topic) stays out of memory. */
+    private fun rememberAnswer(key: String, value: String) {
+        val v = value.trim()
+        if (v.isBlank() || v.length > 160) return
+        val factKey = when (key) {
+            "channelName" -> "youtube channel name"
+            "niche" -> "content niche"
+            "audience" -> "target audience"
+            "style" -> "preferred video style"
+            "voiceStyle" -> "preferred narration style"
+            "language" -> "preferred language"
+            else -> null
+        } ?: return
+        com.example.util.SaifMemoryCore.remember(
+            com.example.util.SaifMemoryCore.Features.VIDEO, factKey, v
+        )
+    }
+
     private fun say(text: String, error: Boolean = false, card: QuestionCard? = null) =
         update { copy(turns = turns + ChatTurn(fromUser = false, text = text, card = card, isError = error)) }
     private fun status(stage: DirectorStage, label: String, fraction: Float? = null, detail: String = "") =
@@ -195,6 +213,9 @@ class DirectorController(
 
     fun answer(key: String, value: String) {
         if (_ui.value.working) return
+        // The owner's answers become app-wide memories: the chat and the live conversation know the channel,
+        // the niche and the tone too, and the next video starts from them instead of asking again.
+        rememberAnswer(key, value)
         update {
             val idx = turns.indexOfLast { it.card?.key == key }
             val newTurns = if (idx >= 0) turns.toMutableList().also { it[idx] = it[idx].copy(cardAnswered = value) } else turns
@@ -312,11 +333,14 @@ class DirectorController(
         val nar = services.synthNarration(b, manifest) { i, n -> status(DirectorStage.GENERATING_NARRATION, "Generating narration", i.toFloat() / n, "$i/$n") }
         if (nar.clips.isEmpty()) { fail("Narration could not be generated. " + nar.failures.firstOrNull().orEmpty()); return }
         manifest = nar.manifest; narrationClips = nar.clips; gate()
-        // The AI asset editor reads the whole Telegram library and picks the exact clip / picture / sound for every scene.
+        // The asset hunter fills the timeline ONE ASSET AT A TIME: it looks at one place, asks for that one file
+        // (format + 2-3 keywords), searches Telegram, downloads it, LOOKS at it, retries with changed keywords when
+        // it is wrong, and only then places it and moves on to the next place.
         val useLibrary = b.assetPolicy?.startsWith("Generate", true) != true
-        status(DirectorStage.FINDING_ASSETS, "Choosing assets from your Telegram library")
-        val ao = if (useLibrary) services.curateAssets(b, manifest, "default") { i, n -> status(DirectorStage.CHECKING_ASSETS, "Checking assets", i.toFloat() / maxOf(1, n), "$i/$n") }
-            else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; graphics are generated."), emptyList())
+        status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
+        val ao = if (useLibrary) services.huntAssets(b, manifest, "default") { step ->
+            status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
+        } else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; graphics are generated."), emptyList())
         assets = ao.assets
         val requestNote = if (useLibrary) requestNeeds(b, manifest, ao) else null
         // Scenes that got a real library sound do not also get a synthetic one on top.
@@ -330,7 +354,13 @@ class DirectorController(
         update { copy(manifest = manifest, problems = all, working = false, readyToApply = true,
             status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "Ready — ${manifest.scenes.size} scenes, ${narrationClips.size} narration clips, ${assets.size} verified assets")) }
         pendingProject = p
-        say("Your video is built: ${manifest.scenes.size} scenes, total ${manifest.totalMs / 1000}s." + (if (all.isNotEmpty()) "\n\nNotes:\n" + all.take(8).joinToString("\n") { "• $it" } else "") + "\n\nTap “Add to timeline” to preview it, or tell me what to change.")
+        // Show the one-at-a-time hunt so the owner can see which file was accepted for which place, and which
+        // places were rejected and retried with different keywords.
+        val hunt = services.lastHuntLog.filter { it.contains("ACCEPTED") || it.contains("asked") || it.contains("rejected") }
+        val huntBlock = if (useLibrary && hunt.isNotEmpty()) "\n\nAsset hunt (one at a time):\n" + hunt.take(14).joinToString("\n") { "• $it" } else ""
+        say("Your video is built: ${manifest.scenes.size} scenes, total ${manifest.totalMs / 1000}s." +
+            (if (all.isNotEmpty()) "\n\nNotes:\n" + all.take(8).joinToString("\n") { "• $it" } else "") + huntBlock +
+            "\n\nTap “Add to timeline” to preview it, or tell me what to change.")
     }
 
     private suspend fun runVoiceOver() {
@@ -347,9 +377,11 @@ class DirectorController(
         services.lastPlanNote.takeIf { it.isNotBlank() }?.let { say(it) }
         m = m.copy(scenes = m.scenes.mapIndexed { i, s -> if (i == m.scenes.lastIndex) s.copy(endMs = maxOf(s.endMs, total)) else s })
         update { copy(manifest = m) }; gate()
-        status(DirectorStage.FINDING_ASSETS, "Choosing assets from your Telegram library")
+        status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
         val ao = if (b.assetPolicy?.startsWith("Generate", true) == true) AssetOutcome(emptyList(), emptyList(), emptyList())
-            else services.curateAssets(b, m, "default") { i, n -> status(DirectorStage.CHECKING_ASSETS, "Checking assets", i.toFloat() / maxOf(1, n), "$i/$n") }
+            else services.huntAssets(b, m, "default") { step ->
+                status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
+            }
         assets = ao.assets
         val reqNote = requestNeeds(b, m, ao)
         store.saveArtifacts(projectId, workflow, narrationClips, assets)
@@ -453,8 +485,12 @@ class DirectorController(
         if (_ui.value.working) return
         job = scope.launch { guarded {
             val b = _ui.value.brief
-            status(DirectorStage.FINDING_ASSETS, "Checking Telegram for new assets")
-            val ao = services.curateAssets(b, m, "default") { i, n -> status(DirectorStage.CHECKING_ASSETS, "Checking assets", i.toFloat() / maxOf(1, n), "$i/$n") }
+            status(DirectorStage.FINDING_ASSETS, "Hunting the missing assets on Telegram, one at a time")
+            // Only the places that are still empty are hunted again, so assets already placed are never re-downloaded.
+            val empty = HuntSlots.unfilled(HuntSlots.build(m, b.aspect), assets).map { it.sceneId }.toSet()
+            val ao = services.huntAssets(b, m, "default", only = empty.ifEmpty { null }) { step ->
+                status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
+            }
             val before = assets.size
             assets = ao.assets
             val reqNote = requestNeeds(b, m, ao)

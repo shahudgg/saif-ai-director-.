@@ -71,6 +71,31 @@ object MediaInspector {
         }
     }
 
+    /**
+     * True when the picture really has transparent pixels. This decides whether the asset is placed as a small
+     * STICKER above the graphics (a cut-out PNG) or as a full-frame BACKDROP behind them — guessing from the file
+     * extension alone was wrong often enough to hide an asset behind an opaque rectangle.
+     */
+    fun hasAlpha(file: File, probe: MediaProbe): Boolean {
+        if (probe.kind != "image") return false
+        return try {
+            val edge = maxOf(probe.width, probe.height)
+            val o = BitmapFactory.Options().apply { inSampleSize = maxOf(1, edge / 256) }
+            val bmp = BitmapFactory.decodeFile(file.absolutePath, o) ?: return false
+            try {
+                if (!bmp.hasAlpha()) return@try false
+                val w = bmp.width; val h = bmp.height
+                if (w < 4 || h < 4) return@try false
+                // A cut-out sticker has transparent corners; a photograph never does.
+                val corners = intArrayOf(bmp.getPixel(0, 0), bmp.getPixel(w - 1, 0), bmp.getPixel(0, h - 1), bmp.getPixel(w - 1, h - 1))
+                if (corners.count { ((it ushr 24) and 0xFF) < 24 } >= 2) return@try true
+                val px = IntArray(w * h)
+                bmp.getPixels(px, 0, w, 0, 0, w, h)
+                px.count { ((it ushr 24) and 0xFF) < 24 }.toFloat() / px.size > 0.06f
+            } finally { runCatching { bmp.recycle() } }
+        } catch (_: Exception) { false }
+    }
+
     /** Down-sampled JPEG (base64) for multimodal verification. Frames for videos come from the middle of the clip. */
     fun previewJpegBase64(file: File, probe: MediaProbe, maxEdge: Int = 640): String? = try {
         val bmp: Bitmap? = if (probe.kind == "image") {
@@ -105,16 +130,32 @@ object AssetDecision {
     }
 }
 
-data class VisualCheck(val match: Boolean, val score: Int, val issues: List<String> = emptyList(), val unsafe: Boolean = false) {
+data class VisualCheck(
+    val match: Boolean, val score: Int, val issues: List<String> = emptyList(), val unsafe: Boolean = false,
+    /** Keyword suggestion from the verifier, used by the hunter's retry loop. */
+    val betterKeywords: List<String> = emptyList()
+) {
     companion object {
         fun parse(raw: String): VisualCheck? = runCatching {
             val o = JSONObject(SceneJson.extractJson(raw))
             val issues = o.optJSONArray("issues")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
+            val kw = o.optJSONArray("betterKeywords")?.let { a ->
+                (0 until a.length()).map { a.optString(it).trim().lowercase() }.filter { it.length > 1 }.take(3)
+            } ?: emptyList()
             VisualCheck(o.optBoolean("match", false), o.optInt("score", 0).coerceIn(0, 10), issues,
-                unsafe = issues.any { it.contains("unsafe", true) })
+                unsafe = issues.any { it.contains("unsafe", true) }, betterKeywords = kw)
         }.getOrNull()
     }
 }
+
+/** Everything the sequential hunter needs after looking at one downloaded file. */
+data class HuntVerdict(
+    val verdict: AssetVerdict,
+    val transparent: Boolean = false,
+    val ext: String = "",
+    val betterKeywords: List<String> = emptyList(),
+    val visual: VisualCheck? = null
+)
 
 object AssetVerifier {
     /** Full verification of a downloaded file. [visionAvailable] must come from the provider registry. */
@@ -129,5 +170,32 @@ object AssetVerifier {
             }
         }
         return AssetDecision.decide(probe, req, targetAspect, visual)
+    }
+
+    /**
+     * Verification for the SEQUENTIAL hunter: it looks at the file in the context of the exact moment it would be
+     * cut into, and it returns what the editor needs to know to place it (real extension, transparency) plus better
+     * keywords for the next try when the file is wrong.
+     */
+    suspend fun verifyForHunt(
+        context: Context, file: File, what: String, kind: String, situation: String,
+        targetAspect: String?, visionAvailable: Boolean, alreadyTried: List<String> = emptyList()
+    ): HuntVerdict {
+        val probe = MediaInspector.probe(context, file)
+        val ext = file.extension.lowercase().ifBlank { kind }
+        val transparent = probe.valid && MediaInspector.hasAlpha(file, probe)
+        var visual: VisualCheck? = null
+        if (probe.valid && probe.kind != "audio" && visionAvailable) {
+            MediaInspector.previewJpegBase64(file, probe)?.let { b64 ->
+                val prof = AiProfile.fromSettings(context)
+                val r = AiClient(prof).callWithImages(
+                    LlmRole.REVIEWER, DirectorPrompts.assetMatchAt(what, situation, kind, alreadyTried), b64
+                )
+                visual = r.getOrNull()?.let { VisualCheck.parse(it) }
+            }
+        }
+        val req = AssetRequest("hunt", kind, what)
+        val verdict = AssetDecision.decide(probe, req, targetAspect, visual)
+        return HuntVerdict(verdict, transparent, ext, visual?.betterKeywords ?: emptyList(), visual)
     }
 }
