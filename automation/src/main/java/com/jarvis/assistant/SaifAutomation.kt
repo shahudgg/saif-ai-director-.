@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import com.jarvis.assistant.background.JarvisConversationService
+import com.jarvis.assistant.background.JarvisLiveError
 import com.jarvis.assistant.ui.home.MainActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
