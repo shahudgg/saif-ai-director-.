@@ -72,4 +72,85 @@ object SceneLint {
         val union = fa.union(fb).size.toDouble()
         return inter / union >= 0.8 && abs(fa.size - fb.size) <= 1
     }
+
+    /**
+     * STRUCTURE signature: which primitive family the scene is built from, how many of each, its palette and its
+     * camera move. Two scenes with the same signature feel like the same template even when their boxes are in
+     * slightly different places — which is exactly the "every video looks the same" complaint.
+     */
+    fun structure(g: SceneGraph): String {
+        val counts = g.elements.filter { it.type !in DECOR }
+            .groupBy { it.type }.map { "${it.key}${it.value.size}" }.sorted().joinToString("+")
+        val palette = (listOf(g.bgTop, g.bgBottom) + g.elements.map { it.color }.take(4))
+            .map { it.lowercase() }.distinct().sorted().joinToString(",")
+        val cam = "${"%.1f".format(g.camera.zoomTo)}|${"%.2f".format(g.camera.panXTo)}"
+        return "$counts#$palette#$cam"
+    }
+
+    /** Primitive-family signature only (no colours), for a softer comparison. */
+    fun family(g: SceneGraph): String = g.elements.filter { it.type !in DECOR }
+        .groupBy { it.type }.map { "${it.key}${it.value.size}" }.sorted().joinToString("+")
+
+    /**
+     * True when two scenes are so alike that a viewer would call one a copy of the other. Stricter than [sameLook]:
+     * it also catches "same shapes, shifted a little" and "same shapes, recoloured".
+     */
+    fun tooSimilar(a: SceneGraph, b: SceneGraph): Boolean {
+        if (sameLook(a, b)) return true
+        val fa = fingerprint(a); val fb = fingerprint(b)
+        if (fa.isEmpty() || fb.isEmpty()) return false
+        val jaccard = fa.intersect(fb).size.toDouble() / fa.union(fb).size
+        val sameFamily = family(a) == family(b) && family(a).isNotBlank()
+        // Same primitive recipe AND (nearly the same layout OR the same palette) = a template repeat.
+        if (sameFamily && (jaccard >= 0.55 || structure(a) == structure(b))) return true
+        // Same recipe, same colours, only the camera differs.
+        return sameFamily && jaccard >= 0.40 && structure(a) == structure(b)
+    }
+}
+
+/**
+ * Whole-video uniqueness critic. `planManifest` asks it after every accepted scene, so a video can never end up
+ * with three scenes that are the same diagram in different colours.
+ */
+object SceneUniqueness {
+
+    /** Indices of the already-accepted scenes that [candidate] repeats, strongest repeat first. */
+    fun repeatsOf(candidate: SceneGraph, accepted: List<SceneGraph>): List<Int> {
+        val out = ArrayList<Pair<Int, Double>>()
+        accepted.forEachIndexed { i, a ->
+            if (SceneLint.tooSimilar(a, candidate)) {
+                val fa = SceneLint.fingerprint(a); val fb = SceneLint.fingerprint(candidate)
+                val j = if (fa.isEmpty() || fb.isEmpty()) 1.0 else fa.intersect(fb).size.toDouble() / fa.union(fb).size
+                out += i to j
+            }
+        }
+        return out.sortedByDescending { it.second }.map { it.first }
+    }
+
+    /**
+     * A readable reason to send back to the model, naming the scene it copied and what must change.
+     * [indexInVideo] is the 0-based position of the new scene.
+     */
+    fun reason(candidate: SceneGraph, accepted: List<SceneGraph>, indexInVideo: Int): String? {
+        val hits = repeatsOf(candidate, accepted)
+        if (hits.isEmpty()) return null
+        val worst = hits.first()
+        val a = accepted[worst]
+        val shared = SceneLint.fingerprint(a).intersect(SceneLint.fingerprint(candidate))
+        val shapes = shared.map { it.substringBefore('@') }.distinct().take(4)
+        return "scene ${indexInVideo + 1} repeats the design of scene ${worst + 1}" +
+            (if (shapes.isNotEmpty()) " (same ${shapes.joinToString("/")} in nearly the same places)" else "") +
+            ". Redesign it with a DIFFERENT primitive family (radar, arcdial, table, steps, orbit, ribbon, heat, stack, compare, spiral, halftone, ticker, wave, badge, spotlight...), a different layout and a different colour balance."
+    }
+
+    /** Pairs of scenes in a finished manifest that still look alike, reported honestly to the owner. */
+    fun collisions(scenes: List<SceneGraph?>): List<Pair<Int, Int>> {
+        val out = ArrayList<Pair<Int, Int>>()
+        for (i in scenes.indices) for (j in i + 1 until scenes.size) {
+            val a = scenes[i] ?: continue
+            val b = scenes[j] ?: continue
+            if (SceneLint.tooSimilar(a, b)) out += i to j
+        }
+        return out
+    }
 }

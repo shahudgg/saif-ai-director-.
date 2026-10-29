@@ -90,6 +90,45 @@ fun SaifAiApp(
     // Video Project Timeline Studio states
     var showVideoProjectDialog by remember { mutableStateOf(false) }
     var showNewProjectSheet by remember { mutableStateOf(false) }
+    // Round 9: the purple mic opens SAIF AI's live conversation, powered by the SAIF AI AUTOMATION engine.
+    var showLiveModeSheet by remember { mutableStateOf(false) }
+
+    /**
+     * A MediaProjection can only be requested from a visible activity, so SAIF AI asks for it and then hands it to
+     * the automation engine (`SaifAutomation.startScreenShare`). The engine never opens its own permission screen.
+     */
+    val screenCapturePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode != android.app.Activity.RESULT_OK || data == null) {
+            com.example.ui.components.SaifLiveSession.pendingScreenShare = false
+            android.widget.Toast.makeText(context, "Screen share ke liye permission chahiye thi.", android.widget.Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        val mpm = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+        val projection = mpm.getMediaProjection(result.resultCode, data)
+        if (projection == null) {
+            com.example.ui.components.SaifLiveSession.pendingScreenShare = false
+            android.widget.Toast.makeText(context, "MediaProjection nahi mila.", android.widget.Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        val metrics = android.util.DisplayMetrics().also { dm ->
+            @Suppress("DEPRECATION")
+            (context.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealMetrics(dm)
+        }
+        // Screen share always runs on top of a live session: start the session first if the user jumped straight here.
+        if (!com.jarvis.assistant.SaifAutomation.isLiveRunning.value) {
+            com.jarvis.assistant.SaifAutomation.startLive(context, com.jarvis.assistant.SaifAutomation.LiveMode.SCREEN_SHARE, isLightMode)
+        }
+        val started = com.jarvis.assistant.SaifAutomation.startScreenShare(projection, metrics)
+        com.example.ui.components.SaifLiveSession.pendingScreenShare = false
+        android.widget.Toast.makeText(
+            context,
+            if (started) "SAIF AI ab aapki screen dekh kar madad karega." else "Screen share start nahi ho paya.",
+            android.widget.Toast.LENGTH_LONG
+        ).show()
+    }
     var activeVideoProjectData by remember { mutableStateOf<com.example.ui.components.VideoProjectData?>(null) }
     var showVideoStudio by remember { mutableStateOf(false) }
     var pendingVideoProjectName by remember { mutableStateOf("Cyberpunk Tokyo Vlog") }
@@ -284,8 +323,8 @@ fun SaifAiApp(
                         onPlusClick = { showConfigureDialog = true },
                         onNewVideoProjectClick = { showNewProjectSheet = true },
                         onAutomationClick = {
-                            // Red "+": opens SAIF AI AUTOMATION using the API saved in Settings.
-                            com.jarvis.assistant.SaifAutomation.launch(context, isLightMode)
+                            // The red "+" button is gone. SAIF AI AUTOMATION now lives behind the purple mic.
+                            showLiveModeSheet = true
                         },
                         isFilterBookmarked = isFilterBookmarked,
                         onToggleBookmarkFilter = { viewModel.toggleBookmarkFilter() },
@@ -379,8 +418,7 @@ fun SaifAiApp(
                             contract = ActivityResultContracts.RequestPermission()
                         ) { isGranted ->
                             if (isGranted) {
-                                com.example.LiveVoiceManager.currentSessionId = viewModel.activeSessionId.value
-                                com.example.LiveVoiceManager.toggleLiveVoice(context)
+                                showLiveModeSheet = true
                             } else {
                                 android.widget.Toast.makeText(context, "Microphone permission is required for Live Voice", android.widget.Toast.LENGTH_LONG).show()
                             }
@@ -445,15 +483,8 @@ fun SaifAiApp(
                                 if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                                     micPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                                 } else {
-                                    if (!android.provider.Settings.canDrawOverlays(context)) {
-                                        val intent = android.content.Intent(
-                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            android.net.Uri.parse("package:${context.packageName}")
-                                        )
-                                        context.startActivity(intent)
-                                    }
-                                    com.example.LiveVoiceManager.currentSessionId = viewModel.activeSessionId.value
-                                    com.example.LiveVoiceManager.toggleLiveVoice(context)
+                                    // Two options now: Normal voice or Screen share. The automation engine runs both.
+                                    showLiveModeSheet = true
                                 }
                             },
                             onGalleryClick = { 
@@ -595,22 +626,41 @@ fun SaifAiApp(
                     )
                 }
 
-                // Full Screen Live Voice Overlay
-                val isLiveActive by com.example.LiveVoiceManager.isLiveModeActive.collectAsState()
-                val liveEngine by com.example.LiveVoiceManager.engineFlow.collectAsState()
+                // Full-screen LIVE conversation: the SAIF AI AUTOMATION 3D orb, inside SAIF AI's own UI.
+                // (This replaced the old sparkle-star FloatingVoiceOverlay animation.)
+                val isAutomationLive by com.jarvis.assistant.SaifAutomation.isLiveRunning.collectAsState()
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = isLiveActive && liveEngine != null,
+                    visible = isAutomationLive,
                     enter = androidx.compose.animation.fadeIn(),
                     exit = androidx.compose.animation.fadeOut()
                 ) {
-                    liveEngine?.let { engine ->
-                        com.example.ui.components.FloatingVoiceOverlay(
-                            engine = engine,
-                            onClose = { com.example.LiveVoiceManager.stopLiveVoice(context) },
-                            onOpenApp = { /* nothing, already in app */ },
-                            isInApp = true
-                        )
-                    }
+                    com.example.ui.components.SaifLiveConversationPanel(
+                        isLightMode = isLightMode,
+                        onClose = { com.jarvis.assistant.SaifAutomation.stopLive(context) },
+                        onRequestScreenShare = {
+                            com.example.ui.components.SaifLiveSession.pendingScreenShare = true
+                            screenCapturePermissionLauncher.launch(
+                                (context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE)
+                                    as android.media.projection.MediaProjectionManager).createScreenCaptureIntent()
+                            )
+                        }
+                    )
+                }
+
+                // Normal / Screen-share chooser behind the purple mic.
+                if (showLiveModeSheet) {
+                    com.example.ui.components.SaifLiveModeSheet(
+                        isLightMode = isLightMode,
+                        onDismiss = { showLiveModeSheet = false },
+                        onNeedScreenCapturePermission = {
+                            showLiveModeSheet = false
+                            com.example.ui.components.SaifLiveSession.pendingScreenShare = true
+                            screenCapturePermissionLauncher.launch(
+                                (context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE)
+                                    as android.media.projection.MediaProjectionManager).createScreenCaptureIntent()
+                            )
+                        }
+                    )
                 }
             }
         } // Close Scaffold

@@ -57,6 +57,7 @@ fun SaifHeader(
     onOpenSettings: () -> Unit,
     onPlusClick: () -> Unit,
     onNewVideoProjectClick: () -> Unit = {},
+    /** Kept for compatibility: the red "+" is gone, this now opens SAIF AI's live-conversation mode sheet. */
     onAutomationClick: () -> Unit = {},
     isFilterBookmarked: Boolean,
     onToggleBookmarkFilter: () -> Unit,
@@ -64,7 +65,7 @@ fun SaifHeader(
     onOpenAdminDashboard: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Phones are narrow: with the extra red "+" the header switches to a compact layout.
+    // Phones are narrow: below 480 dp the header switches to a compact layout.
     val compact = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 480
     val iconBtn = if (compact) 32.dp else 36.dp
 
@@ -430,47 +431,10 @@ fun SaifHeader(
                         }
                     }
 
-                    // 3. Red SAIF AI AUTOMATION Plus Button (JARVIS-style voice & phone automation agent)
-                    val automationPlusInteraction = remember { MutableInteractionSource() }
-                    val isAutomationPlusPressed by automationPlusInteraction.collectIsPressedAsState()
-                    val automationPlusScale by animateFloatAsState(
-                        targetValue = if (isAutomationPlusPressed) 0.80f else 1f,
-                        animationSpec = spring(dampingRatio = Spring.DampingRatioHighBouncy, stiffness = Spring.StiffnessLow),
-                        label = "AutomationPlusScale"
-                    )
-                    IconButton(
-                        onClick = onAutomationClick,
-                        interactionSource = automationPlusInteraction,
-                        modifier = Modifier
-                            .size(iconBtn)
-                            .scale(automationPlusScale)
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0x33EF4444),
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFF87171).copy(alpha = 0.9f)),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(
-                                        Brush.linearGradient(
-                                            listOf(Color(0xFFDC2626), Color(0xFFEF4444))
-                                        )
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = "SAIF AI AUTOMATION (+ Automation)",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-                        }
-                    }
+                    // The red SAIF AI AUTOMATION "+" button was REMOVED in Round 9: the whole automation engine
+                    // now lives inside SAIF AI's own live-conversation feature (the purple mic next to the input
+                    // bar), so there is no second front door and no separate credit. `onAutomationClick` is kept
+                    // only so older callers still compile; it opens the same live mode sheet.
                 }
             }
         }

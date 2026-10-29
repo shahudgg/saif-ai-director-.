@@ -28,6 +28,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.jarvis.assistant.JarvisApp
+import com.jarvis.assistant.SaifAutomation
 import com.jarvis.assistant.audio.VoskModelManager
 import org.json.JSONObject
 import org.vosk.Recognizer
@@ -683,7 +684,11 @@ class JarvisConversationService : Service() {
     private suspend fun generateCurrentSystemPrompt(): String {
         val app = JarvisApp.instance
         return withContext(Dispatchers.IO) {
-            val memoryContext = app.memoryManager.getSystemPromptContext()
+            // App-wide recall first: whatever SAIF AI learned in the chat, while making a video or in the builder
+            // is remembered here too. The module's own memory bank is added on top of it.
+            val hostMemory = SaifAutomation.hostMemory("live")
+            val ownMemory = app.memoryManager.getSystemPromptContext()
+            val memoryContext = listOf(hostMemory, ownMemory).filter { it.isNotBlank() }.joinToString("\n")
             val favSong = app.memoryManager.resolveSongQuery("my favorite song")
             com.jarvis.assistant.util.PromptGenerator.generateSystemPrompt(
                 personality = preferences.personality,
@@ -805,7 +810,9 @@ class JarvisConversationService : Service() {
                 liveWebSocket = GeminiLiveWebSocket(
                     apiKey = apiKey,
                     model = preferences.aiModel,
-                    voiceName = preferences.voice,
+                    // SAIF AI Settings owns the voice now (default: SAIF ADVANCE VOICE). The module's own copy is
+                    // only the fallback for a device where the host resolver was never registered.
+                    voiceName = SaifAutomation.hostVoiceName()?.takeIf { it.isNotBlank() } ?: preferences.voice,
                     systemPrompt = systemPrompt,
                     listener = object : GeminiLiveWebSocket.Listener {
                         override fun onConnectionStateChanged(status: String) {

@@ -327,7 +327,7 @@ private fun ProductionOptions() {
             Text("Narration voice", fontSize = 10.sp, color = Color(0xFFCCC3D9))
             var voice by remember { mutableStateOf(com.example.studio.director.BrandKit.narrationVoice(ctx)) }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("Kabir", "Priya").forEach { v -> Chip(v, highlight = voice == v) { voice = v; com.example.studio.director.BrandKit.setNarrationVoice(ctx, v) } }
+                com.example.ui.components.VOICE_PROFILES.forEach { p -> Chip(p.name, highlight = voice == p.id) { voice = p.id; com.example.studio.director.BrandKit.setNarrationVoice(ctx, p.id) } }
             }
             Text("Accent colour", fontSize = 10.sp, color = Color(0xFFCCC3D9))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

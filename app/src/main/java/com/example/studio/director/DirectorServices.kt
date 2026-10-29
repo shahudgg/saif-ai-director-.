@@ -9,6 +9,7 @@ import com.example.studio.composer.LocalBeatAnalyzer
 import com.example.studio.composer.SceneComposer
 import com.example.studio.composer.Strategy
 import com.example.studio.composer.SceneLint
+import com.example.studio.composer.SceneUniqueness
 import com.example.studio.composer.StyleDNA
 import android.net.Uri
 import com.example.llm.LlmRole
@@ -184,6 +185,9 @@ class DirectorServices(private val context: Context) {
         var failedBatches = 0
         val batchSize = when (strategy) { Strategy.STRONG -> 3; Strategy.STANDARD -> 3; Strategy.LIGHT -> 2; null -> 0 }
         val digestFacts = SceneFacts.parse(researchDigest)
+        // Every scene accepted so far, so no later scene may repeat an earlier one anywhere in the video
+        // (the old gate only compared a scene with its immediate neighbour, which is how templates crept in).
+        val acceptedGraphs = ArrayList<SceneGraph>()
         if (batchSize > 0) {
             val batches = outlines.withIndex().toList().chunked(batchSize)
             for ((bi, batch) in batches.withIndex()) {
@@ -193,7 +197,11 @@ class DirectorServices(private val context: Context) {
                 if (designByModel && failedBatches >= 2 && modelScenes.isEmpty()) break          // this model cannot design scenes: stop wasting calls
                 if (designByModel) {
                     val cached = outs.map { sceneCache[cacheKey(b, it)] }
-                    if (cached.all { it != null }) { batch.forEachIndexed { k, iv -> modelScenes[iv.index] = cached[k]!! }; continue }
+                    if (cached.all { it != null }) {
+                        batch.forEachIndexed { k, iv -> modelScenes[iv.index] = cached[k]!! }
+                        cached.mapNotNull { it?.graph }.forEach { acceptedGraphs.add(it) }
+                        continue
+                    }
                     var accepted: List<Scene>? = null
                     var problem = ""
                     for (attempt in 1..attemptsPerBatch) {
@@ -219,10 +227,23 @@ class DirectorServices(private val context: Context) {
                             LayoutEngine.issues(fx, aw, ah, sc.durationMs).firstOrNull()?.toString()
                         } }
                         if (layoutBad != null) { problem = "Layout problem: $layoutBad. Keep every element fully inside the frame, text inside its shape, and elements apart from each other."; continue }
+                        // ANTI-TEMPLATE GATE: no scene may repeat one already accepted, in this batch or earlier.
+                        var uniqBad: String? = null
+                        val running = ArrayList<SceneGraph>(acceptedGraphs)
+                        for (mi in merged.indices) {
+                            val gr = merged[mi].graph ?: continue
+                            val why = SceneUniqueness.reason(gr, running, batch[mi].index)
+                            if (why != null) { uniqBad = why; break }
+                            running.add(gr)
+                        }
+                        if (uniqBad != null) { problem = "Originality problem: $uniqBad"; continue }
                         accepted = merged; break
                     }
                     if (accepted == null) failedBatches++
-                    accepted?.let { ok -> batch.forEachIndexed { k, iv -> modelScenes[iv.index] = ok[k]; sceneCache[cacheKey(b, outs[k])] = ok[k] } }
+                    accepted?.let { ok ->
+                        batch.forEachIndexed { k, iv -> modelScenes[iv.index] = ok[k]; sceneCache[cacheKey(b, outs[k])] = ok[k] }
+                        ok.mapNotNull { it.graph }.forEach { acceptedGraphs.add(it) }
+                    }
                 } else {
                     askDirectives(b, outs, total, strategy!!).fold(
                         { ds -> ds.forEach { d -> directives[d.index - 1] = d } },
@@ -238,6 +259,8 @@ class DirectorServices(private val context: Context) {
         var localCount = 0
         var prevTransition: String? = null
         var prevGraph: SceneGraph? = null
+        // Graphs actually built for this video, in order: the uniqueness gate compares every new scene against all of them.
+        val builtGraphs = ArrayList<SceneGraph>(acceptedGraphs)
         val dna = StyleDNA.fromAnswer(b.answers["styleSeed"])
         val scenes = ArrayList<Scene>()
         outlines.forEachIndexed { i, o ->
@@ -247,13 +270,25 @@ class DirectorServices(private val context: Context) {
             val modelScene = modelScenes[i]
             var graph: SceneGraph? = modelScene?.graph?.let { g ->
                 val fixed = LayoutEngine.repair(SceneLint.adoptCards(g, aw, ah), aw, ah, dur).graph
-                val prev = prevGraph
                 val ok = LayoutEngine.issues(fixed, aw, ah, dur).isEmpty() && SceneLint.problems(fixed, aw, ah).isEmpty() &&
-                    (prev == null || !SceneLint.sameLook(prev, fixed))
+                    SceneUniqueness.repeatsOf(fixed, builtGraphs).isEmpty()
                 if (ok) fixed else null
             }
-            if (graph == null) { graph = SceneComposer.compose(beat, b.aspect ?: "9:16", accentOverride = BrandKit.accent(context), dna = dna); localCount++ }
+            if (graph == null) {
+                // The model's design was a repeat or failed the layout: the local composer designs a DIFFERENT one,
+                // forced away from every scene already built for this video.
+                var local = SceneComposer.compose(beat, b.aspect ?: "9:16", accentOverride = BrandKit.accent(context), dna = dna)
+                var guard = 0
+                while (SceneUniqueness.repeatsOf(local, builtGraphs).isNotEmpty() && guard < 4) {
+                    local = SceneComposer.compose(beat, b.aspect ?: "9:16", accentOverride = BrandKit.accent(context),
+                        dna = com.example.studio.composer.StyleDNA.fromAnswer((b.answers["styleSeed"] ?: "0").let { sd -> (sd.toIntOrNull()?.plus(guard * 977 + i * 31)?.toString()) ?: sd }))
+                    guard++
+                }
+                graph = local
+                localCount++
+            }
             prevGraph = graph
+            builtGraphs.add(graph)
             scenes += Scene(
                 id = o.id, startMs = o.startMs, endMs = o.endMs, narration = o.narration,
                 visualObjective = "${beat.intent.name}: ${beat.headline}".take(80), graph = graph,
@@ -265,7 +300,12 @@ class DirectorServices(private val context: Context) {
         val note = StringBuilder("Planned ${scenes.size} beats (about ${"%.1f".format(scenes.sumOf { it.durationMs } / 1000.0 / scenes.size)} s each)")
         note.append(when (strategy) { null -> " — no AI model configured, so visuals were designed locally from your script."; else -> " — model strategy: ${strategy.name}." })
         if (modelDown != null) note.append(" The model became unavailable, so the remaining beats were designed locally.")
-        else if (strategy != null && localCount > 0 && designByModel) note.append(" $localCount beat(s) used the local designer because the model's layout failed validation.")
+        else if (strategy != null && localCount > 0 && designByModel) note.append(" $localCount beat(s) were redesigned by the local composer because the model's design repeated an earlier scene or failed validation.")
+        // Honest report when two scenes still look alike after every gate (the owner asked for this specifically).
+        val collisions = SceneUniqueness.collisions(scenes.map { it.graph })
+        if (collisions.isNotEmpty()) note.append(" ${collisions.size} pair(s) of scenes still look similar: " +
+            collisions.take(3).joinToString(", ") { "scene ${it.first + 1} and ${it.second + 1}" } + ".")
+        else note.append(" Every scene has its own design — no two scenes share a layout.")
         lastPlanNote = note.toString()
 
         var m = SceneManifest(fps = fps, title = b.prompt.lineSequence().firstOrNull().orEmpty().take(60), scenes = scenes)
@@ -414,6 +454,220 @@ class DirectorServices(private val context: Context) {
         return AssetOutcome(resolved, unresolved, notes, needs.distinctBy { it.description.lowercase() })
     }
 
+    // ------------------------------------------------------------------ sequential asset hunt
+
+    /** Readable trace of the last hunt, one line per place on the timeline (shown in the director chat). */
+    var lastHuntLog: List<String> = emptyList()
+        private set
+
+    /**
+     * SEQUENTIAL ASSET HUNT — the replacement for "ask the model for the whole asset list in one call".
+     *
+     * The Telegram library is synced ONCE, then the video is walked place by place, in playing order. For each
+     * place the model is asked for exactly ONE asset: what it must show, in which FILE FORMAT (png / jpg / mp4 /
+     * mp3 ...), and with only TWO OR THREE search keywords. Those keywords search the local catalog, the best hit
+     * is downloaded and LOOKED AT (technical probe + a vision check against that exact moment of the video). A
+     * rejected file makes the model change the keywords a little and try the same place again, up to
+     * [AssetHunter.MAX_TRIES] times. Only a verified file is placed on the timeline, and it is placed with full
+     * control (position, size, fit, keyframes, glow, blend, grade, corner, entrance/exit) — then the hunt moves
+     * on to the next place. Nothing is ever faked: a place that stays empty is reported.
+     *
+     * @param onStep one progress line per search / download / verify, for the director chat.
+     * @param only   scene ids to re-hunt (null = the whole video).
+     */
+    suspend fun huntAssets(
+        b: DirectorBrief, m: SceneManifest, userId: String,
+        onStep: (HuntStep) -> Unit = {},
+        only: Set<String>? = null,
+        maxSlots: Int = 48
+    ): AssetOutcome {
+        val resolved = ArrayList<ResolvedAsset>()
+        val unresolved = ArrayList<String>()
+        val notes = ArrayList<String>()
+        val needs = ArrayList<AssetNeed>()
+        val log = ArrayList<String>()
+        lastHuntLog = log
+
+        val token = WebResearch.telegramToken(context)
+        if (token.isBlank()) {
+            notes += "Telegram asset library is not configured (no bot token in this build). Add TG_BOT_TOKEN and TG_CHAT_ID as GitHub secrets and rebuild."
+            return AssetOutcome(emptyList(), emptyList(), notes)
+        }
+        val all = runCatching { TelegramAssetManager.syncChannelAssets(botToken = token, context = context) }.getOrDefault(emptyList())
+        val library = AssetLibrary.usable(all, userId)
+        libraryProblem(token, library.size)?.let { notes += it; return AssetOutcome(emptyList(), emptyList(), notes) }
+
+        val chat = can(Capability.CHAT)
+        val vision = can(Capability.IMAGE_UNDERSTANDING)
+        if (!vision) notes += "No vision-capable provider is configured, so downloaded files are accepted on technical checks and keyword match only (the hunter cannot LOOK at them)."
+        if (!chat) notes += "No AI model is configured, so assets were hunted with keywords taken from the narration instead of an AI asset editor."
+
+        val slots = HuntSlots.build(m, b.aspect).filter { sl -> only == null || sl.sceneId in only }.take(maxSlots)
+        if (slots.isEmpty()) {
+            notes += "No place in this video asked for a library asset."
+            return AssetOutcome(emptyList(), emptyList(), notes)
+        }
+
+        val title = m.title.ifBlank { b.prompt.lineSequence().firstOrNull().orEmpty() }
+        val sampleAll = AssetLibrary.sampleTitles(library, "all", 20)
+        val used = HashSet<String>()
+        val sceneById = m.scenes.associateBy { it.id }
+        var done = 0
+
+        for (sl in slots) {
+            done++
+            var current: HuntNeed? = null
+            var accepted: ResolvedAsset? = null
+            val attempts = ArrayList<HuntAttempt>()
+            val rejectedTitles = ArrayList<String>()
+            var uploadRequest: String? = null
+            var tryNo = 0
+
+            hunt@ while (tryNo < AssetHunter.MAX_TRIES && accepted == null) {
+                tryNo++
+                // 1. ONE need for this place (the model, or a deterministic seed when no model answers).
+                var need = current
+                if (need == null) {
+                    onStep(HuntStep(done, slots.size, "Scene ${sl.sceneIndex + 1}/${sl.sceneCount} · deciding what this moment needs", (done - 1f) / slots.size))
+                    val asked = askNeed(title, sl, library.size, sampleAll, chat)
+                    need = asked ?: AssetHunter.seedNeed(sl)
+                    if (asked == null) log += "Scene ${sl.sceneIndex + 1}: the model did not answer, so the keywords were taken from the narration."
+                    if (!need.want) {
+                        uploadRequest = need.what.takeIf { it.length > 5 }
+                        log += "Scene ${sl.sceneIndex + 1}: no library asset needed here (${need.reason.ifBlank { "the graphics already explain it" }})."
+                        break@hunt
+                    }
+                    current = need
+                }
+                onStep(HuntStep(done, slots.size, AssetHunter.stepText(sl, need, need.keywords, tryNo, resolved.size), (done - 1f) / slots.size))
+
+                // 2. search the local catalog with those two or three keywords, filtered by the wanted format.
+                var hits = AssetLibrary.search(library, need.keywords, need.ext, limit = 3, avoidIds = used, strictFormat = true)
+                if (hits.isEmpty()) hits = AssetLibrary.search(library, need.keywords, need.ext, limit = 3, avoidIds = used, strictFormat = false)
+                if (hits.isEmpty()) {
+                    attempts += HuntAttempt(need.keywords, need.ext, "", "no file in the library matched “${need.keywords.joinToString(" ")} ${need.ext}”", AssetLibrary.sampleTitles(library, need.ext, 8))
+                    log += "Scene ${sl.sceneIndex + 1} · “${need.keywords.joinToString(" ")} ${need.ext}” → nothing in the library."
+                    current = reviseNeed(sl, need, attempts, library.size, sampleAll, chat)
+                    if (current == null) { uploadRequest = need.what; break@hunt }
+                    continue@hunt
+                }
+
+                // 3. download and LOOK AT the best hits, one by one.
+                for (c in hits) {
+                    val dl = TelegramAssetManager.downloadCandidate(context, userId, c, token)
+                    val path = dl?.localCachedPath
+                    if (path == null) {
+                        val err = TelegramAssetManager.lastDownloadError.ifBlank { "unknown error" }
+                        attempts += HuntAttempt(need.keywords, need.ext, c.title, "download failed: $err")
+                        log += "Scene ${sl.sceneIndex + 1} · '${c.title}' could not be downloaded ($err)."
+                        continue
+                    }
+                    val f = File(path)
+                    val situation = buildString {
+                        append("Scene ").append(sl.sceneIndex + 1).append(" of ").append(sl.sceneCount).append(": \"").append(sl.narration.take(200)).append('"')
+                        if (sl.isSfx) append(" — sound at ").append(sl.atMs).append(" ms (").append(sl.cueKind).append(')')
+                        val vo = sceneById[sl.sceneId]?.visualObjective
+                        if (!vo.isNullOrBlank()) append("\nThis beat is about: ").append(vo.take(120))
+                    }
+                    val v = AssetVerifier.verifyForHunt(context, f, need.what, need.kind, situation, b.aspect, vision, rejectedTitles)
+                    if (!v.verdict.accepted) {
+                        rejectedTitles += "${c.title}: ${v.verdict.reason}"
+                        attempts += HuntAttempt(need.keywords, need.ext, c.title, v.verdict.reason, hits.map { it.title })
+                        log += "Scene ${sl.sceneIndex + 1} · rejected '${c.title}' — ${v.verdict.reason}"
+                        // The verifier's own keyword suggestion is the cheapest good retry.
+                        val suggested = v.betterKeywords.take(3)
+                        if (suggested.size >= 2 && suggested.toSet() != need.keywords.toSet() && attempts.none { it.keywords == suggested }) {
+                            current = need.copy(keywords = suggested)
+                            continue@hunt
+                        }
+                        continue
+                    }
+
+                    // 4. verified: place it with full control, then stop hunting for this place.
+                    used += AssetLibrary.idOf(c)
+                    val placement: AssetPlacement? = if (sl.isSfx) null else {
+                        val base = need.placement ?: AssetPlacements.defaultFor(need.kind, v.ext, v.transparent, b.aspect)
+                        // The file's REAL transparency decides sticker vs backdrop, whatever the model guessed.
+                        val role = when {
+                            v.transparent -> "sticker"
+                            base.role == "sticker" && v.ext != "png" && v.ext != "webp" -> "backdrop"
+                            else -> base.role
+                        }
+                        AssetPlacements.clamp(base.copy(role = role))
+                    }
+                    val probeKind = v.verdict.probe?.kind
+                    accepted = ResolvedAsset(
+                        sceneId = sl.sceneId,
+                        requestId = if (sl.isSfx) "sfx-${sl.slotId}" else "lib-${sl.slotId}",
+                        kind = if (sl.isSfx) "audio" else if (probeKind == "video") "video" else "image",
+                        localPath = f.absolutePath,
+                        source = "telegram:${AssetLibrary.idOf(c)} (licence unverified)",
+                        verified = true,
+                        note = "hunter: ${need.reason.ifBlank { need.what }}".take(110) +
+                            (placement?.let { " · ${PlacementApplier.describe(it)}" } ?: ""),
+                        atMs = if (sl.isSfx) need.atMs else 0L,
+                        durMs = if (sl.isSfx) minOf(AudioDurations.durationMs(f).takeIf { it > 0 } ?: need.durMs, need.durMs.coerceAtLeast(150L)) else 0L,
+                        ext = v.ext,
+                        transparent = v.transparent,
+                        placement = placement
+                    )
+                    log += "Scene ${sl.sceneIndex + 1} · ACCEPTED '${c.title}' (${v.ext}) after $tryNo try/tries" +
+                        (if (v.verdict.visuallyVerified) " — visually verified ${v.verdict.score}/10" else " — technical checks only") +
+                        (placement?.let { " · ${PlacementApplier.describe(it)}" } ?: "")
+                    break
+                }
+                if (accepted != null) break@hunt
+
+                // 5. every downloaded file was wrong: change the keywords a little and try this place again.
+                attempts += HuntAttempt(need.keywords, need.ext, "", "every downloaded file was rejected")
+                current = reviseNeed(sl, need, attempts, library.size, sampleAll, chat)
+                if (current == null) { uploadRequest = need.what; break@hunt }
+            }
+
+            if (accepted != null) {
+                resolved += accepted
+                onStep(HuntStep(done, slots.size, "Scene ${sl.sceneIndex + 1}/${sl.sceneCount} · placed · ${resolved.size} asset(s) so far", done.toFloat() / slots.size))
+            } else if (uploadRequest != null) {
+                needs += AssetNeed(sl.sceneId, if (sl.isSfx) "sfx" else (current?.kind ?: "video"), uploadRequest.take(160))
+                unresolved += "${sl.sceneId}/${sl.slotId}: nothing suitable in the library for \"${(current?.what ?: uploadRequest).take(50)}\" — asked on Telegram"
+            } else {
+                unresolved += "${sl.sceneId}/${sl.slotId}: no suitable asset after $tryNo tries — procedural graphics used"
+            }
+        }
+
+        val pictures = resolved.count { it.kind != "audio" }
+        val sounds = resolved.count { it.kind == "audio" }
+        notes += "Hunted one asset at a time: $pictures picture/clip(s) and $sounds sound(s) placed from ${library.size} library file(s); " +
+            "${needs.distinctBy { it.description.lowercase() }.size} need(s) are not in the library and were requested on Telegram."
+        lastHuntLog = log
+        return AssetOutcome(resolved, unresolved, notes, needs.distinctBy { it.description.lowercase() })
+    }
+
+    /** Asks the model for exactly ONE asset need for ONE place on the timeline. */
+    private suspend fun askNeed(title: String, sl: HuntSlot, librarySize: Int, sample: List<String>, chat: Boolean): HuntNeed? {
+        if (!chat) return null
+        val raw = llm(AssetHunter.needPrompt(title, sl, librarySize, sample), maxTokens = 900).getOrNull() ?: return null
+        if (ModelOutputGuard.reason(raw) != null) return null
+        return AssetHunter.parseNeed(raw, sl)
+    }
+
+    /** After a failure: a small keyword change for the SAME asset, or null when this place should be given up. */
+    private suspend fun reviseNeed(
+        sl: HuntSlot, need: HuntNeed, attempts: List<HuntAttempt>, librarySize: Int, sample: List<String>, chat: Boolean
+    ): HuntNeed? {
+        if (!chat) return fallbackRevise(sl, need, attempts)
+        val raw = llm(AssetHunter.revisePrompt(sl, need, attempts, sample, librarySize), maxTokens = 500).getOrNull()
+            ?: return fallbackRevise(sl, need, attempts)
+        if (ModelOutputGuard.reason(raw) != null) return fallbackRevise(sl, need, attempts)
+        return AssetHunter.parseRevision(raw, sl, need) ?: fallbackRevise(sl, need, attempts)
+    }
+
+    /** Deterministic keyword widening when the model cannot repair its own search. */
+    private fun fallbackRevise(sl: HuntSlot, need: HuntNeed, attempts: List<HuntAttempt>): HuntNeed? {
+        val tried = attempts.map { it.keywords.joinToString(" ") }.toSet()
+        val next = AssetHunter.keywordLadder(need, sl).firstOrNull { it.joinToString(" ") !in tried } ?: return null
+        return need.copy(keywords = next)
+    }
     /**
      * Finds licensed SFX in the Telegram library for each sound kind the manifest asks for (whoosh, pop, ding...).
      * Returns kind -> local file URI. Kinds with no match are simply absent, so procedural SFX is used for them.

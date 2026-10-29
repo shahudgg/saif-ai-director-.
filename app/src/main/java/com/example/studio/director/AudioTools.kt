@@ -176,7 +176,8 @@ object Transcriber {
 }
 
 /**
- * Real narration files from the device TTS engine, voiced with the app's own "Kabir" profile (same voice as the chat),
+ * Real narration files from the device TTS engine, voiced with the app's selected voice (see utils/SaifVoice -
+ * the SAME voice as the chat and the live conversation, SAIF ADVANCE VOICE by default),
  * with silence trimmed and loudness matched so scenes flow as one continuous voice.
  */
 object DeviceSpeech {
@@ -253,7 +254,8 @@ object DeviceSpeech {
             if (fallback == TextToSpeech.LANG_MISSING_DATA || fallback == TextToSpeech.LANG_NOT_SUPPORTED)
                 return@withLock Result.failure(IllegalStateException("This device has no voice for ${language ?: "that language"}. Install it in Android TTS settings."))
         }
-        val profile = com.example.ui.components.VOICE_PROFILES.firstOrNull { it.id == BrandKit.narrationVoice(context) } ?: com.example.ui.components.VOICE_PROFILES.first()
+        // One voice everywhere: the narration uses the voice the user picked in the main Settings panel.
+        val profile = com.example.utils.SaifVoice.narrationProfile(context)
         val paceMul = when (pace?.lowercase()) { "slow" -> 0.9f; "fast" -> 1.12f; else -> 1.0f }
         tts.setPitch(profile.pitch)
         tts.setSpeechRate((profile.speechRate.coerceIn(0.9f, 1.08f) * paceMul).coerceIn(0.7f, 1.4f))

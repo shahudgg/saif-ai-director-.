@@ -71,7 +71,10 @@ CORE GUIDELINES:
         finalPrompt.append(coreDirective).append("\n\n")
 
         try {
-            val memoryBlock = com.example.util.SmartConversationMemory.buildMemoryPromptBlock()
+            // App-wide memory: the chat sees everything SAIF AI learned in any feature.
+            val memoryBlock = com.example.util.SaifMemoryCore.promptBlock(
+                com.example.util.SaifMemoryCore.Features.CHAT
+            )
             if (memoryBlock.isNotBlank()) {
                 finalPrompt.append(memoryBlock).append("\n\n")
             }

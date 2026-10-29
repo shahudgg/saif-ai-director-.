@@ -210,7 +210,7 @@ object TTSManager : TextToSpeech.OnInitListener {
         val isHinglish = isHinglishOrHindi(clean)
         val hasExcitement = clean.contains("!") || clean.contains("Bilkul", ignoreCase = true)
 
-        val profile = VOICE_PROFILES.find { it.id == voiceId || (voiceId == "Fenrir" && it.id == "Kabir") } ?: VOICE_PROFILES.first()
+        val profile = VOICE_PROFILES.find { it.id == voiceId } ?: VOICE_PROFILES.first()
         applyProfile(profile, isHinglish = isHinglish, hasDevanagari = hasDevanagari, hasExcitement = hasExcitement)
 
         _currentlySpeakingText.value = text
@@ -258,12 +258,13 @@ object TTSManager : TextToSpeech.OnInitListener {
         }
 
         val prefs = context.getSharedPreferences("VoiceSettings", Context.MODE_PRIVATE)
-        val selectedVoiceId = prefs.getString("selected_voice_id", "Kabir") ?: "Kabir"
+        // One voice for the whole app: SaifVoice resolves the saved choice and defaults to SAIF ADVANCE VOICE.
+        val selectedVoiceId = SaifVoice.selectedId(context)
 
         val hasDevanagari = cleanText.any { it in '\u0900'..'\u097F' }
         val isHinglish = isHinglishOrHindi(cleanText)
         val hasExcitement = cleanText.contains("!") || cleanText.contains("Bilkul", ignoreCase = true) || cleanText.contains("Super", ignoreCase = true)
-        val profile = VOICE_PROFILES.find { it.id == selectedVoiceId || (selectedVoiceId == "Fenrir" && it.id == "Kabir") } ?: VOICE_PROFILES.first()
+        val profile = VOICE_PROFILES.find { it.id == selectedVoiceId } ?: SaifVoice.selected(context)
         
         applyProfile(profile, isHinglish = isHinglish, hasDevanagari = hasDevanagari, hasExcitement = hasExcitement)
 

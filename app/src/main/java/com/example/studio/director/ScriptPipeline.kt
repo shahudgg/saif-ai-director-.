@@ -155,7 +155,13 @@ class ScriptPipeline(private val ask: suspend (String) -> Result<String>, privat
         var lastErr: Throwable? = null
         for (attempt in 1..2) {
             val extra = lastErr?.let { "\nThe previous attempt was rejected: ${it.message}. Write clean narration only, in the requested language." } ?: ""
-            val r = ask(DirectorPrompts.scriptV2(b, digest, targetWords, hook) + extra)
+            // App-wide memory: the channel name, niche, tone and past projects SAIF AI learned anywhere else in the
+            // app are used while writing this script, so a repeat owner is not asked to explain themselves again.
+            val memory = com.example.util.SaifMemoryCore.promptBlock(
+                com.example.util.SaifMemoryCore.Features.VIDEO, limit = 12
+            )
+            val memoryBlock = if (memory.isBlank()) "" else "\n" + memory + "\nUse this only as background. Never name these facts in the narration unless the video is about them."
+            val r = ask(DirectorPrompts.scriptV2(b, digest, targetWords, hook) + memoryBlock + extra)
             if (r.isFailure) { lastErr = r.exceptionOrNull(); continue }
             val text = VoiceoverScript.clean(r.getOrThrow())
             if (text.length <= 40) { lastErr = IllegalStateException("Model returned an empty script"); continue }
