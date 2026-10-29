@@ -1,0 +1,103 @@
+{
+  "board_game": {
+    "name": "Board Game",
+    "keywords": ["ludo", "chess", "checkers", "carrom", "snakes", "tic tac toe", "monopoly"],
+    "must_have": [
+      "2 to 4 player support with human and smart AI computer opponent",
+      "Animated interactive dice / turn indicator with roll physics",
+      "Exact board rules: safe squares, capture mechanics, home stretch, exact roll to win",
+      "Turn timer, current player highlight with colored tokens",
+      "Win modal with confetti/particles, winner podium, and restart option",
+      "Sound effects toggle (using Web Audio API synthesizers)",
+      "How to play / Rules bottom sheet or tab",
+      "Persistent match stats and win history in localStorage"
+    ]
+  },
+  "arcade_game": {
+    "name": "Arcade Game",
+    "keywords": ["flappy", "runner", "snake", "pong", "brick", "shooter", "puzzle", "2048", "tetris"],
+    "must_have": [
+      "Responsive 60fps canvas / css transform game loop",
+      "Touch controls (swipe, tap buttons, on-screen d-pad)",
+      "Score tracker and persistent local high score",
+      "Pause / Resume overlay with sound mute toggle",
+      "Increasing difficulty / speed levels with visual feedback",
+      "Game over screen with instant restart",
+      "Haptic feedback on crash / point scored via navigator.vibrate"
+    ]
+  },
+  "quiz_trivia": {
+    "name": "Quiz & Trivia",
+    "keywords": ["quiz", "trivia", "mcq", "exam", "test", "flashcard", "qa"],
+    "must_have": [
+      "Categorized question banks with multiple difficulty levels",
+      "Interactive option buttons with instant correct/incorrect visual feedback",
+      "Countdown timer per question with warning color state",
+      "Score tally, streak multiplier, and progress bar",
+      "Detailed summary screen with answer review and explanations",
+      "Persistent score history and personal best"
+    ]
+  },
+  "finance_tracker": {
+    "name": "Finance & Expense Tracker",
+    "keywords": ["expense", "finance", "budget", "money", "wallet", "hisab", "khata", "kharcha"],
+    "must_have": [
+      "Income, expense, and transfer transaction logging with categories",
+      "Visual balance cards (Total Balance, Monthly Income, Monthly Expense)",
+      "Interactive SVG/Canvas category spending breakdown and charts",
+      "Transaction list with search, category filtering, and date range",
+      "Currency selector (INR ₹, USD $, EUR €)",
+      "Budget limit progress bars with warning alerts",
+      "CSV export and full persistent local storage with backup"
+    ]
+  },
+  "productivity_todo": {
+    "name": "Productivity & Habits",
+    "keywords": ["todo", "task", "habit", "notes", "checklist", "planner", "routine"],
+    "must_have": [
+      "Task creation with title, priority (High/Med/Low), tags, and due dates",
+      "Streak tracking calendar/grid for habits",
+      "Filter by status (All, Active, Completed, Overdue)",
+      "Swipe to delete or complete with undo toast",
+      "Search bar with live filtering",
+      "Statistics / completion rate graphs",
+      "LocalStorage persistence with error-resilient wrapper"
+    ]
+  },
+  "ecommerce_store": {
+    "name": "E-Commerce & Food Ordering",
+    "keywords": ["shop", "store", "ecommerce", "food", "menu", "cart", "order", "delivery"],
+    "must_have": [
+      "Product catalog with categories, search, price sorting, and rating filters",
+      "Product detail modal with image gallery, quantity selector, and description",
+      "Persistent shopping cart with quantity adjustments and item removal",
+      "Order checkout wizard with address, delivery notes, and payment mode mockup",
+      "Discount promo code input with calculation",
+      "Order status tracking screen (Placed -> Preparing -> Delivered)"
+    ]
+  },
+  "fitness_health": {
+    "name": "Fitness & Health Tracker",
+    "keywords": ["workout", "fitness", "gym", "calorie", "water", "step", "diet", "bmi"],
+    "must_have": [
+      "Daily goal circles (Water, Calories, Workout time, Steps)",
+      "Interactive exercise logger with sets, reps, and weights",
+      "Rest timer with audio beep on completion",
+      "BMI and calorie calculation tools",
+      "Weekly progress SVG charts",
+      "Streak tracking and motivational achievements"
+    ]
+  },
+  "utilities_tools": {
+    "name": "Utility & Tool",
+    "keywords": ["calc", "calculator", "unit", "converter", "weather", "clock", "stopwatch", "timer"],
+    "must_have": [
+      "High precision calculation engine with history tape",
+      "Clean keypad with haptic press micro-interactions",
+      "Conversion matrix across units (length, weight, temp, currency)",
+      "Copy result to clipboard with toast confirmation",
+      "Theme toggle (Dark / Light / OLED black)",
+      "Instant offline availability"
+    ]
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "41872778254",
+    "project_id": "saif-ai-2e541",
+    "storage_bucket": "saif-ai-2e541.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:41872778254:android:4ff13f3a82b2f552dd885f",
+        "android_client_info": {
+          "package_name": "com.saifai.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBJbawm0R86d2QlknCNz1ScjkuGm6QHjyk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:41872778254:android:4ff13f3a82b2f552dd885f",
+        "android_client_info": {
+          "package_name": "com.saifai.assistant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBJbawm0R86d2QlknCNz1ScjkuGm6QHjyk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

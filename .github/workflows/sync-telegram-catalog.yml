@@ -1,0 +1,39 @@
+name: Sync Telegram catalog
+
+# Telegram keeps unread bot updates for only 24 hours. This job copies new channel posts into telegram_catalog/catalog.json
+# every 6 hours, so assets you upload are never lost and are included in the next APK build.
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Read new Telegram posts
+      env:
+        TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      run: python3 scripts/telegram_catalog.py
+
+    - name: Commit catalog if it changed
+      run: |
+        git config user.name "saif-ai-bot"
+        git config user.email "saif-ai-bot@users.noreply.github.com"
+        git add telegram_catalog/catalog.json
+        if git diff --cached --quiet; then
+          echo "No new Telegram assets."
+        else
+          git commit -m "chore: sync Telegram asset catalog"
+          git push
+        fi

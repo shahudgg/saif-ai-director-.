@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Outer Soft Glow Ring -->
+    <path
+        android:pathData="M54,26 A28,28 0 1,0 54,82 A28,28 0 1,0 54,26 Z"
+        android:strokeWidth="1.5"
+        android:strokeColor="#333B82F6" />
+
+    <!-- Hexagonal Cyber Shield -->
+    <path
+        android:pathData="M54,29 L75,41 L75,67 L54,79 L33,67 L33,41 Z">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="33"
+                android:startY="29"
+                android:endX="75"
+                android:endY="79"
+                android:type="linear">
+                <item android:color="#3B82F6" android:offset="0.0" />
+                <item android:color="#6366F1" android:offset="0.5" />
+                <item android:color="#8B5CF6" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="33"
+                android:startY="29"
+                android:endX="75"
+                android:endY="79"
+                android:type="linear">
+                <item android:color="#261E3A8A" android:offset="0.0" />
+                <item android:color="#20312E81" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Glowing futuristic SAIF 'S' AI core -->
+    <path
+        android:pathData="M66,41 C66,37.5 61,35 54,35 C46,35 42,39 42,44 C42,50 48,52 56,54 C64,56 68,59 68,64 C68,71 62,75 54,75 C45,75 40,71 40,66"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="40"
+                android:startY="35"
+                android:endX="68"
+                android:endY="75"
+                android:type="linear">
+                <item android:color="#60A5FA" android:offset="0.0" />
+                <item android:color="#3B82F6" android:offset="0.4" />
+                <item android:color="#8B5CF6" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Top Star/Sparkle -->
+    <path
+        android:pathData="M54,23 L55.5,27 L59.5,28.5 L55.5,30 L54,34 L52.5,30 L48.5,28.5 L52.5,27 Z"
+        android:fillColor="#93C5FD" />
+
+    <!-- Corner AI Neural Nodes -->
+    <path
+        android:pathData="M33,41 A2.5,2.5 0 1,0 33,46 A2.5,2.5 0 1,0 33,41 Z"
+        android:fillColor="#38BDF8" />
+    <path
+        android:pathData="M75,41 A2.5,2.5 0 1,0 75,46 A2.5,2.5 0 1,0 75,41 Z"
+        android:fillColor="#818CF8" />
+    <path
+        android:pathData="M75,67 A2.5,2.5 0 1,0 75,72 A2.5,2.5 0 1,0 75,67 Z"
+        android:fillColor="#A78BFA" />
+    <path
+        android:pathData="M33,67 A2.5,2.5 0 1,0 33,72 A2.5,2.5 0 1,0 33,67 Z"
+        android:fillColor="#60A5FA" />
+</vector>

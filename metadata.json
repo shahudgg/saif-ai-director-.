@@ -1,0 +1,6 @@
+{
+  "name": "SAIF AI",
+  "description": "Pure Native Android AI assistant featuring obsidian dark aesthetics, streaming responses, multi-session management, and Gemini intelligence",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,51 @@
+{
+  "com.google.android.youtube": {
+    "package": "com.google.android.youtube",
+    "label": "YouTube",
+    "searchIconDesc": "Search",
+    "likeDescPrefix": "like this video",
+    "subscribeText": "Subscribe",
+    "subscribedText": "Subscribed",
+    "hints": "Search icon desc 'Search'. First non-Short, non-Ad row below header is the latest video. Like button desc starts 'like this video'. Subscribe button shows 'Subscribe' or 'Subscribed'. View count is the '<n> views' text under video title."
+  },
+  "com.whatsapp": {
+    "package": "com.whatsapp",
+    "label": "WhatsApp",
+    "sendDesc": "Send",
+    "attachDesc": "Attach",
+    "hints": "Send button has desc 'Send' or id 'send'. Attach menu has 'Location' -> 'Share live location' with duration chips (15 min, 1 hour, 8 hours). Search icon top for chats."
+  },
+  "com.instagram.android": {
+    "package": "com.instagram.android",
+    "label": "Instagram",
+    "hints": "Bottom navigation tabs: Home, Search, Create, Reels, Profile. Own story is at top left of Home; swipe up on own story or tap seen-by eye icon to view viewer count. Create -> Story to post."
+  },
+  "capcut": {
+    "package": "com.lemon.lvoverseas",
+    "label": "CapCut",
+    "hints": "'New project' button on home tab. Media picker displays Videos and Photos tabs. Tap thumbnail then 'Add' to place on timeline."
+  },
+  "com.android.vending": {
+    "package": "com.android.vending",
+    "label": "Google Play Store",
+    "hints": "Profile avatar at top right -> 'Manage apps & device' -> 'Updates available' -> 'Update all'."
+  },
+  "com.google.android.apps.nbu.paisa.user": {
+    "package": "com.google.android.apps.nbu.paisa.user",
+    "label": "Google Pay",
+    "risk": "high",
+    "hints": "Financial app: Never enter UPI PIN or complete payment. Yield to user."
+  },
+  "com.phonepe.app": {
+    "package": "com.phonepe.app",
+    "label": "PhonePe",
+    "risk": "high",
+    "hints": "Financial app: Never enter UPI PIN or complete payment. Yield to user."
+  },
+  "net.one97.paytm": {
+    "package": "net.one97.paytm",
+    "label": "Paytm",
+    "risk": "high",
+    "hints": "Financial app: Never enter UPI PIN or complete payment. Yield to user."
+  }
+}

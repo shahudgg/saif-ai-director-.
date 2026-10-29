@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">SAIF AI</string>
+    <string name="accessibility_service_description">SAIF AI Accessibility Automation service helps perform hands-free voice automation, screen interactions, and device navigation on your request.</string>
+</resources>

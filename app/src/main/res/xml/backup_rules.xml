@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Exclude sensitive API keys and cryptographic vaults from cloud backup -->
+    <exclude domain="sharedpref" path="ProviderSettingsPrefs.xml" />
+    <exclude domain="sharedpref" path="saif_model_limits_v1.xml" />
+</full-backup-content>
