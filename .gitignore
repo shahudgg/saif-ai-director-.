@@ -19,3 +19,7 @@ debug.keystore
 /.build-outputs
 *.apk
 *.log
+
+# Python bytecode (scripts/*.py are run by CI)
+__pycache__/
+*.pyc

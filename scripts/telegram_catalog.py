@@ -94,7 +94,7 @@ def parse_caption(caption, file_id, message_id, size):
     return item
 
 
-def index_from_file(name, mime, file_id, message_id, size, duration):
+def index_from_file(name, mime, file_id, message_id, size, duration, caption=""):
     ext = (name.rsplit(".", 1)[-1].lower() if "." in name else "") or (mime.split("/", 1)[-1].lower() if "/" in mime else "")
     if mime.startswith("audio") or ext in AUDIO_EXT:
         typ = "audio"
@@ -105,8 +105,13 @@ def index_from_file(name, mime, file_id, message_id, size, duration):
     else:
         return None
     base = name.rsplit(".", 1)[0] if "." in name else name
-    base = base or "asset_%s" % message_id
-    words = [w for w in re.split(r"[\W_]+", base.lower()) if len(w) > 1]
+    # Telegram often sends videos/photos with NO file_name, which used to leave the asset with the
+    # useless keyword "asset". The caption almost always describes the clip, so mine it as well.
+    cap = re.sub(r"\s+", " ", (caption or "")).strip()
+    if not base or re.fullmatch(r"asset[_-]?\d+", base, re.I):
+        base = (cap[:48].strip() or "asset_%s" % message_id)
+    words = [w for w in re.split(r"[\W_]+", (name or "").lower() + " " + (caption or "").lower()) if len(w) > 1]
+    words = [w for w in words if not re.fullmatch(r"\d+", w)]
     if typ == "audio":
         cat = "sfx" if (0 < duration <= 10 or any(w in SFX_WORDS for w in words)) else "bgm"
     elif typ == "video":
@@ -127,7 +132,12 @@ def process(updates):
         if not post:
             continue
         chat = post.get("chat") or {}
-        if CHAT and str(chat.get("id", "")) != CHAT and (chat.get("username") or "").lower() != CHAT.lstrip("@").lower():
+        is_channel = (str(chat.get("id", "")) == CHAT
+                      or (chat.get("username") or "").lower() == CHAT.lstrip("@").lower()) if CHAT else True
+        # The Bot API cannot read channel history, so the owner can forward the existing library to
+        # the bot in a private chat; those posts are indexed too (file ids never expire for a bot).
+        is_owner_dm = chat.get("type") == "private"
+        if not (is_channel or is_owner_dm):
             continue
         mid = int(post.get("message_id", 0))
         text = post.get("caption") or post.get("text") or ""
@@ -143,7 +153,7 @@ def process(updates):
         if not fid:
             continue
         item = parse_caption(text, fid, mid, size) if text else None
-        item = item or index_from_file(name, mime, fid, mid, size, dur)
+        item = item or index_from_file(name, mime, fid, mid, size, dur, caption=text)
         if item:
             out.append(item)
     return out
@@ -158,11 +168,41 @@ def load_store():
         return []
 
 
+def diagnose():
+    """Prints the four things that make a channel look empty, so CI tells us which one it is."""
+    me = api("getMe")
+    if not me.get("ok"):
+        warn("Telegram getMe failed: %s. TG_BOT_TOKEN looks invalid." % me.get("description", "unknown"))
+        return
+    bot = me.get("result") or {}
+    print("Telegram bot: @%s (id %s)" % (bot.get("username", "?"), bot.get("id", "?")))
+    if not CHAT:
+        warn("TG_CHAT_ID is empty.")
+        return
+    print("Telegram channel id: %s" % CHAT)
+    chat = api("getChat", {"chat_id": CHAT})
+    if not chat.get("ok"):
+        warn("getChat failed: %s -- add this bot as an ADMIN of the channel."
+             % chat.get("description", "unknown error"))
+        return
+    c = chat.get("result") or {}
+    print("Telegram channel: %r (type=%s)" % (c.get("title", "?"), c.get("type", "?")))
+    member = api("getChatMember", {"chat_id": CHAT, "user_id": bot.get("id")})
+    status = ((member.get("result") or {}).get("status") or "")
+    if status:
+        print("Bot membership: %s" % status)
+        if status not in ("administrator", "creator"):
+            warn("The bot is '%s' in the channel but must be 'administrator' to receive channel posts." % status)
+    print("NOTE: the Bot API cannot read channel history. Only posts made while the bot is an admin are delivered.")
+    print("      To import an existing library once, forward those posts to the bot in a private chat.")
+
+
 def main():
     items = load_store()
     if not TOKEN:
         warn("TG_BOT_TOKEN is empty: the APK is built without the Telegram library. Add the repository secret and rebuild.")
     else:
+        diagnose()
         hook = api("getWebhookInfo")
         if hook.get("ok") and (hook.get("result") or {}).get("url"):
             warn("A webhook is set on this bot, so getUpdates returns nothing. Remove it (deleteWebhook) to let the catalog sync.")
@@ -188,6 +228,10 @@ def main():
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False)
     print("Catalog: %d asset(s) written to %s" % (len(items), os.path.relpath(OUT, ROOT)))
+    if not items:
+        warn("The asset catalog is EMPTY: the APK will be built without a Telegram library. "
+             "Make the bot an administrator of the channel (or forward the assets to the bot once), "
+             "remove any webhook, then re-run this workflow.")
 
 
 if __name__ == "__main__":

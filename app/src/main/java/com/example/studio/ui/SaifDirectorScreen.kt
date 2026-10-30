@@ -278,12 +278,15 @@ private fun TelegramDiagnostics() {
     var count by remember { mutableStateOf(runCatching { com.example.ui.components.TelegramCatalogStore(ctx).items().size }.getOrDefault(0)) }
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
+    // Bot/channel health: token validity, channel reachability, bot admin status and webhook state.
+    var diag by remember { mutableStateOf("") }
     Surface(shape = RoundedCornerShape(10.dp), color = Glass, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Telegram library • $count saved assets", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Text(report?.summary() ?: "Not synced yet.", color = Color(0xFFCCC3D9), fontSize = 10.sp)
             com.example.ui.components.TelegramAssetManager.lastDownloadError.takeIf { it.isNotBlank() }?.let { Text("Last download problem: $it", color = Color(0xFFFFB86B), fontSize = 10.sp) }
             if (note.isNotBlank()) Text(note, color = Color(0xFF9EE6B8), fontSize = 10.sp)
+            if (diag.isNotBlank()) Text(diag.trim(), color = Color(0xFFB9C7FF), fontSize = 10.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(enabled = !busy, onClick = {
                     busy = true
@@ -294,6 +297,16 @@ private fun TelegramDiagnostics() {
                         report = rep; count = com.example.ui.components.TelegramCatalogStore(ctx).items().size; busy = false
                     }
                 }) { Text(if (busy) "Syncing…" else "Sync now", fontSize = 11.sp) }
+                OutlinedButton(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        diag = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.example.ui.components.TelegramCatalogStore(ctx)
+                                .diagnose(WebResearch.telegramToken(ctx), com.example.ui.components.TelegramAssetManager.DEFAULT_CHANNEL_ID)
+                        }
+                        busy = false
+                    }
+                }) { Text("Check connection", fontSize = 11.sp) }
                 if (report?.webhookUrl?.isNotBlank() == true) OutlinedButton(enabled = !busy, onClick = {
                     busy = true
                     scope.launch {

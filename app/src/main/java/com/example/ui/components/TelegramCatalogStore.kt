@@ -45,7 +45,7 @@ object TelegramUpdateProcessor {
     private fun bump(m: MutableMap<String, Int>, k: String) { m[k] = (m[k] ?: 0) + 1 }
 
     /** Guesses type/category from a file name or mime when the post has no [ASSET_INDEX] caption. */
-    fun indexFromFile(fileName: String, mime: String, fileId: String, messageId: Long, fileSize: Long, durationSec: Int): TelegramAssetItem? {
+    fun indexFromFile(fileName: String, mime: String, fileId: String, messageId: Long, fileSize: Long, durationSec: Int, caption: String = ""): TelegramAssetItem? {
         val ext = fileName.substringAfterLast('.', "").lowercase().ifBlank { mime.substringAfter('/', "").lowercase() }
         val type = when {
             mime.startsWith("audio") || ext in setOf("mp3", "wav", "m4a", "ogg", "aac", "flac") -> "audio"
@@ -54,8 +54,16 @@ object TelegramUpdateProcessor {
             ext in setOf("ttf", "otf") -> "font"
             else -> return null
         }
-        val base = fileName.substringBeforeLast('.').ifBlank { "asset_$messageId" }
-        val words = base.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 1 }
+        // Telegram often sends videos/photos with NO file_name, which used to leave the asset with the
+        // useless keyword "asset". The caption almost always describes the clip, so mine it as well.
+        val cap = caption.replace(Regex("\\s+"), " ").trim()
+        val rawBase = fileName.substringBeforeLast('.').ifBlank { "" }
+        val base = if (rawBase.isBlank() || rawBase.matches(Regex("(?i)asset[-_]?\\d+"))) {
+            cap.take(48).trim().ifBlank { "asset_$messageId" }
+        } else rawBase
+        val words = (fileName.lowercase() + " " + caption.lowercase())
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length > 1 && !it.all { c -> c.isDigit() } }
         val category = when (type) {
             "audio" -> if (durationSec in 1..10 || words.any { it in setOf("sfx", "whoosh", "pop", "hit", "click", "swoosh", "ding", "riser", "impact") }) "sfx" else "bgm"
             "video" -> if (words.any { it in setOf("overlay", "glitch", "transition") }) "overlay_graphic" else "b_roll"
@@ -69,7 +77,13 @@ object TelegramUpdateProcessor {
         )
     }
 
-    fun process(response: JSONObject, channelId: String): Processed {
+    /**
+     * @param acceptPrivateChats when true, media that the owner forwards to the bot in a private chat is indexed too.
+     *   This matters because the Bot API has NO way to read a channel's history: getUpdates only ever returns the
+     *   ~24h of pending updates, so older channel posts are invisible no matter what. Forwarding the existing library
+     *   to the bot once makes every file permanently visible to the app (file ids never expire for a bot).
+     */
+    fun process(response: JSONObject, channelId: String, acceptPrivateChats: Boolean = false): Processed {
         val skipped = LinkedHashMap<String, Int>()
         val out = ArrayList<TelegramAssetItem>()
         var fromCaption = 0; var fromName = 0; var maxId = 0L
@@ -82,8 +96,11 @@ object TelegramUpdateProcessor {
             val chat = post.optJSONObject("chat")
             val chatId = chat?.optLong("id", 0L)?.toString().orEmpty()
             val uname = chat?.optString("username", "").orEmpty()
+            val chatType = chat?.optString("type", "").orEmpty()
             val want = channelId.trim()
-            if (want.isNotBlank() && chatId != want && !uname.equals(want.removePrefix("@"), true)) { bump(skipped, "other_chat"); continue }
+            val isWantedChannel = chatId == want || (!want.isBlank() && uname.equals(want.removePrefix("@"), true))
+            val isOwnerDm = acceptPrivateChats && chatType == "private"
+            if (want.isNotBlank() && !isWantedChannel && !isOwnerDm) { bump(skipped, "other_chat"); continue }
             val messageId = post.optLong("message_id", 0L)
             val text = post.optString("caption", "").ifBlank { post.optString("text", "") }
 
@@ -98,7 +115,7 @@ object TelegramUpdateProcessor {
             if (fileId.isBlank()) { bump(skipped, if (text.contains("[ASSET_INDEX]", true)) "caption_without_file" else "no_file"); continue }
             val parsed = if (text.isNotBlank()) TelegramAssetManager.parseAssetCaption(text, fileId, messageId, size) else null
             if (parsed != null) { out += parsed; fromCaption++; continue }
-            val auto = indexFromFile(fileName, mime, fileId, messageId, size, dur)
+            val auto = indexFromFile(fileName, mime, fileId, messageId, size, dur, caption = text)
             if (auto != null) { out += auto; fromName++ } else bump(skipped, "unrecognised_file")
         }
         return Processed(out, fromCaption, fromName, skipped, arr.length(), maxId)
@@ -166,8 +183,53 @@ class TelegramCatalogStore(private val context: Context) {
     /** Explicit user action from the diagnostics panel. */
     fun removeWebhook(botToken: String): Boolean = get("https://api.telegram.org/bot$botToken/deleteWebhook?drop_pending_updates=false")?.optBoolean("ok", false) ?: false
 
+    /**
+     * Readable health check for the diagnostics panel. Bot API has no "read channel history", so most
+     * "the channel is empty" reports come from one of these four things - this says which one.
+     */
+    fun diagnose(botToken: String, channelId: String): String = buildString {
+        if (botToken.isBlank()) {
+            appendLine("BOT TOKEN: missing (TG_BOT_TOKEN). Rebuild with the GitHub secret set.")
+            return@buildString
+        }
+        appendLine("BOT TOKEN: present (" + botToken.take(8) + "\u2026)")
+        val me = get("https://api.telegram.org/bot$botToken/getMe")
+        val meRes = me?.optJSONObject("result")
+        if (me?.optBoolean("ok", false) != true) {
+            appendLine("BOT: getMe FAILED \u2014 " + (me?.optString("description", "invalid token") ?: "network error"))
+            return@buildString
+        }
+        val botId = meRes?.optLong("id", 0L) ?: 0L
+        appendLine("BOT: @" + meRes?.optString("username", "?"))
+        if (channelId.isBlank()) {
+            appendLine("CHANNEL: missing (TG_CHAT_ID).")
+            return@buildString
+        }
+        appendLine("CHANNEL ID: $channelId")
+        val enc = java.net.URLEncoder.encode(channelId, "UTF-8")
+        val chat = get("https://api.telegram.org/bot$botToken/getChat?chat_id=$enc")
+        val c = chat?.optJSONObject("result")
+        if (chat?.optBoolean("ok", false) == true && c != null) {
+            appendLine("CHANNEL: " + c.optString("title", "?") + " (type=" + c.optString("type", "?") + ")")
+        } else {
+            appendLine("CHANNEL: NOT REACHABLE \u2014 " + (chat?.optString("description", "?") ?: "network error"))
+            appendLine("  \u2192 Add this bot as an ADMIN of the channel, then sync again.")
+        }
+        if (botId != 0L && chat?.optBoolean("ok", false) == true) {
+            val mem = get("https://api.telegram.org/bot$botToken/getChatMember?chat_id=$enc&user_id=$botId")
+            val st = mem?.optJSONObject("result")?.optString("status", "").orEmpty()
+            if (st.isNotBlank()) {
+                appendLine("BOT MEMBERSHIP: $st" + if (st == "administrator" || st == "creator") " (OK)" else " \u2014 must be 'administrator'")
+            }
+        }
+        val hook = webhookUrl(botToken)
+        appendLine(if (hook.isNullOrBlank()) "WEBHOOK: none (getUpdates works)" else "WEBHOOK: SET ($hook) \u2014 blocks getUpdates")
+        appendLine("NOTE: the Bot API cannot read channel history. Only posts made while the bot is admin are ever delivered.")
+        appendLine("      To import your existing library once: forward those posts to this bot in a private chat, then sync.")
+    }
+
     @Synchronized
-    fun sync(botToken: String, channelId: String): TelegramSyncReport {
+    fun sync(botToken: String, channelId: String, acceptPrivateChats: Boolean = true): TelegramSyncReport {
         val t0 = System.currentTimeMillis()
         if (botToken.isBlank()) return TelegramSyncReport(false, "No Telegram bot token is configured (TG_BOT_TOKEN).", totalItems = load().items.size).also { saveReport(it) }
         val state = load()
@@ -183,7 +245,7 @@ class TelegramCatalogStore(private val context: Context) {
                     java.net.URLEncoder.encode("[\"channel_post\",\"edited_channel_post\",\"message\",\"edited_message\"]", "UTF-8"))
                 if (resp == null) { error = "Network error while reading updates."; break }
                 if (!resp.optBoolean("ok", false)) { error = resp.optString("description", "Telegram returned an error"); break }
-                val p = TelegramUpdateProcessor.process(resp, channelId)
+                val p = TelegramUpdateProcessor.process(resp, channelId, acceptPrivateChats)
                 if (p.received == 0) break
                 received += p.received; cap += p.fromCaption; name += p.fromFileName
                 p.skipped.forEach { (k, v) -> skipped[k] = (skipped[k] ?: 0) + v }
@@ -196,6 +258,10 @@ class TelegramCatalogStore(private val context: Context) {
             }
             runCatching { save(state) }
         } else error = "A webhook is set on this bot, so Telegram will not deliver new posts to getUpdates."
+        if (error.isBlank() && received == 0 && state.items.isEmpty()) {
+            error = "Telegram returned no pending updates. The Bot API cannot read channel history, so posts made " +
+                "before the bot became an admin are invisible. Forward your library to the bot once, or post new assets."
+        }
         val rep = TelegramSyncReport(error.isBlank(), error, received, cap, name, skipped, state.items.size, webhook, state.lastUpdateId, System.currentTimeMillis() - t0)
         saveReport(rep)
         Log.i("TelegramCatalog", rep.summary().replace(botToken, "***"))
