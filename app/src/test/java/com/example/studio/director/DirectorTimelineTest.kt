@@ -85,6 +85,17 @@ class DirectorTimelineTest {
         val (p2, _) = TimelineAssembler.assemble(p1, parsed(), narration, emptyList())
         assertEquals(p1.items.size, p2.items.size); assertTrue(p2.items.any { it.id == "u1" })
     }
+    @Test fun aSingleSceneEditKeepsItsOriginalTimestamp() {
+        val m = parsed()
+        val (full, _) = TimelineAssembler.assemble(StudioProject.createEmpty("t"), m, narration, emptyList())
+        val replaced = TimelineAssembler.clearAi(full, setOf("s2"))
+        val one = m.copy(scenes = listOf(m.scenes[1]))
+        val (edited, _) = TimelineAssembler.assemble(replaced, one, narration.filter { it.sceneId == "s2" }, emptyList(), replaceExisting = false)
+        val scene = edited.items.filterIsInstance<CodeSceneItem>().first { it.aiWhy!!.startsWith("director:s2:") }
+        assertEquals(4_000_000L, scene.startUs)
+        assertEquals(9_000_000L, scene.startUs + scene.durationUs)
+        assertEquals(9_000_000L, edited.totalDurationUs)
+    }
     @Test fun narrationLongerThanSceneIsReported() {
         val (_, problems) = TimelineAssembler.assemble(StudioProject.createEmpty("t"), parsed(), listOf(NarrationClip("s1", "file:///a.wav", 9000, "x")), emptyList())
         assertTrue(problems.any { it.contains("longer than the scene") })

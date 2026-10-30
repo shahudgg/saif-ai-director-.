@@ -94,7 +94,7 @@ object LayoutEngine {
         "grid", "particles" -> 0
         "glow", "burst" -> 1
         "ring", "circle", "rect", "donut", "icon" -> 2
-        "bars", "linechart", "nodes" -> 3
+        "bars", "linechart", "nodes", "wave", "radar", "steps", "table", "quote", "ticker", "arcdial", "spotlight", "halftone", "scanline", "confetti", "beam", "ribbon", "compare", "heat", "spiral", "orbit", "stack", "badge", "barcode", "depthStack", "parallax", "extrusion", "perspectiveQuad", "perspectiveCard", "cube" -> 3
         "line", "arrow" -> 4
         "text" -> 6
         else -> 7                     // flash, sweep, glitch, grain, vignette overlays

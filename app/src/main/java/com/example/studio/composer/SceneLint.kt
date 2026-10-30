@@ -65,6 +65,10 @@ object SceneLint {
     fun fingerprint(g: SceneGraph): Set<String> = g.elements.filter { it.type !in DECOR }
         .map { "${it.type}@${(it.x * 8).toInt()},${(it.y * 8).toInt()}" }.toSet()
 
+    fun signature(g: SceneGraph): String = g.elements.filter { it.type !in DECOR }.map {
+        "${it.type}@${(it.x * 8).toInt()},${(it.y * 8).toInt()}:${(it.w * 8).toInt()},${(it.h * 8).toInt()}"
+    }.sorted().joinToString("|")
+
     fun sameLook(a: SceneGraph, b: SceneGraph): Boolean {
         val fa = fingerprint(a); val fb = fingerprint(b)
         if (fa.isEmpty() || fb.isEmpty()) return false
@@ -118,7 +122,7 @@ object SceneUniqueness {
     fun repeatsOf(candidate: SceneGraph, accepted: List<SceneGraph>): List<Int> {
         val out = ArrayList<Pair<Int, Double>>()
         accepted.forEachIndexed { i, a ->
-            if (SceneLint.tooSimilar(a, candidate)) {
+            if ((SceneLint.signature(a).isNotBlank() && SceneLint.signature(a) == SceneLint.signature(candidate)) || SceneLint.tooSimilar(a, candidate)) {
                 val fa = SceneLint.fingerprint(a); val fb = SceneLint.fingerprint(candidate)
                 val j = if (fa.isEmpty() || fb.isEmpty()) 1.0 else fa.intersect(fb).size.toDouble() / fa.union(fb).size
                 out += i to j
@@ -149,7 +153,7 @@ object SceneUniqueness {
         for (i in scenes.indices) for (j in i + 1 until scenes.size) {
             val a = scenes[i] ?: continue
             val b = scenes[j] ?: continue
-            if (SceneLint.tooSimilar(a, b)) out += i to j
+            if (repeatsOf(b, listOf(a)).isNotEmpty()) out += i to j
         }
         return out
     }
