@@ -338,9 +338,9 @@ class DirectorController(
         // it is wrong, and only then places it and moves on to the next place.
         val useLibrary = b.assetPolicy?.startsWith("Generate", true) != true
         status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
-        val ao = if (useLibrary) services.huntAssets(b, manifest, "default") { step ->
+        val ao = if (useLibrary) services.huntAssets(b, manifest, "default", onStep = { step ->
             status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-        } else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; graphics are generated."), emptyList())
+        }) else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; graphics are generated."), emptyList())
         assets = ao.assets
         val requestNote = if (useLibrary) requestNeeds(b, manifest, ao) else null
         // Scenes that got a real library sound do not also get a synthetic one on top.
@@ -379,9 +379,9 @@ class DirectorController(
         update { copy(manifest = m) }; gate()
         status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
         val ao = if (b.assetPolicy?.startsWith("Generate", true) == true) AssetOutcome(emptyList(), emptyList(), emptyList())
-            else services.huntAssets(b, m, "default") { step ->
+            else services.huntAssets(b, m, "default", onStep = { step ->
                 status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-            }
+            })
         assets = ao.assets
         val reqNote = requestNeeds(b, m, ao)
         store.saveArtifacts(projectId, workflow, narrationClips, assets)
@@ -488,9 +488,9 @@ class DirectorController(
             status(DirectorStage.FINDING_ASSETS, "Hunting the missing assets on Telegram, one at a time")
             // Only the places that are still empty are hunted again, so assets already placed are never re-downloaded.
             val empty = HuntSlots.unfilled(HuntSlots.build(m, b.aspect), assets).map { it.sceneId }.toSet()
-            val ao = services.huntAssets(b, m, "default", only = empty.ifEmpty { null }) { step ->
+            val ao = services.huntAssets(b, m, "default", onStep = { step ->
                 status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-            }
+            }, only = empty.ifEmpty { null })
             val before = assets.size
             assets = ao.assets
             val reqNote = requestNeeds(b, m, ao)

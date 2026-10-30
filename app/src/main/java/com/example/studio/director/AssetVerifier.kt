@@ -83,15 +83,26 @@ object MediaInspector {
             val o = BitmapFactory.Options().apply { inSampleSize = maxOf(1, edge / 256) }
             val bmp = BitmapFactory.decodeFile(file.absolutePath, o) ?: return false
             try {
-                if (!bmp.hasAlpha()) return@try false
-                val w = bmp.width; val h = bmp.height
-                if (w < 4 || h < 4) return@try false
-                // A cut-out sticker has transparent corners; a photograph never does.
-                val corners = intArrayOf(bmp.getPixel(0, 0), bmp.getPixel(w - 1, 0), bmp.getPixel(0, h - 1), bmp.getPixel(w - 1, h - 1))
-                if (corners.count { ((it ushr 24) and 0xFF) < 24 } >= 2) return@try true
-                val px = IntArray(w * h)
-                bmp.getPixels(px, 0, w, 0, 0, w, h)
-                px.count { ((it ushr 24) and 0xFF) < 24 }.toFloat() / px.size > 0.06f
+                // `try` is not a lambda, so `return@try` is invalid Kotlin - the block below
+                // simply evaluates to the Boolean instead, which is the try-expression's value.
+                if (!bmp.hasAlpha()) {
+                    false
+                } else {
+                    val w = bmp.width; val h = bmp.height
+                    if (w < 4 || h < 4) {
+                        false
+                    } else {
+                        // A cut-out sticker has transparent corners; a photograph never does.
+                        val corners = intArrayOf(bmp.getPixel(0, 0), bmp.getPixel(w - 1, 0), bmp.getPixel(0, h - 1), bmp.getPixel(w - 1, h - 1))
+                        if (corners.count { ((it ushr 24) and 0xFF) < 24 } >= 2) {
+                            true
+                        } else {
+                            val px = IntArray(w * h)
+                            bmp.getPixels(px, 0, w, 0, 0, w, h)
+                            px.count { ((it ushr 24) and 0xFF) < 24 }.toFloat() / px.size > 0.06f
+                        }
+                    }
+                }
             } finally { runCatching { bmp.recycle() } }
         } catch (_: Exception) { false }
     }
