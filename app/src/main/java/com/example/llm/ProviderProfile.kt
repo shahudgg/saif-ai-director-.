@@ -439,6 +439,12 @@ data class ProviderProfile(
         fun detectProviderFromKey(key: String, selectedProviderHint: String = ""): ProviderProfile {
             val trimmed = key.trim().removeSurrounding("\"").removeSurrounding("'").removePrefix("Bearer ").removePrefix("bearer ").trim()
 
+            // An explicitly configured endpoint must not be replaced just because its
+            // OpenAI-compatible key happens to have another vendor's prefix.
+            if (selectedProviderHint.startsWith("https://") || selectedProviderHint.startsWith("http://")) {
+                return getById(selectedProviderHint)
+            }
+
             // 1. Unmistakable vendor-specific prefixes always identify their provider
             if (trimmed.startsWith("AIza") || trimmed.startsWith("AQ.")) return GEMINI
             if (trimmed.startsWith("gsk_")) return GROQ

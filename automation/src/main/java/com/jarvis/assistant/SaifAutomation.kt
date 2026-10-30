@@ -18,7 +18,7 @@ data class SaifApiConfig(
 ) {
     val hasKey: Boolean get() = apiKey.isNotBlank()
 
-    /** The voice engine speaks the Gemini Live protocol, so it needs a Gemini key. */
+    /** Whether the optional native Gemini Live transport can be used. */
     val isGemini: Boolean get() = provider.isBlank() || provider.contains("gemini", ignoreCase = true)
 }
 
@@ -91,6 +91,14 @@ object SaifAutomation {
 
     /** Voice name to speak with, taken from SAIF AI Settings (default: SAIF ADVANCE VOICE). */
     var hostVoiceResolver: (() -> String)? = null
+
+    /** Host-supplied provider-independent speech loop. The service remains the lifecycle owner. */
+    @Volatile var hostLiveTurnFactory: ((Context, String, com.jarvis.assistant.live.HostLiveTurnListener) -> com.jarvis.assistant.live.HostLiveTurnLoop)? = null
+
+    /** Native Gemini audio is opt-in; normal live voice uses the app's selected TTS voice. */
+    var useGeminiNativeLive: Boolean
+        get() = prefs().getBoolean("gemini_native_live", false)
+        set(value) { prefs().edit().putBoolean("gemini_native_live", value).apply() }
 
     /**
      * Memory recall for a feature ("live", "chat", "video", ...). The host answers from the app-wide
@@ -232,6 +240,7 @@ object SaifAutomation {
 
     fun stopScreenShare() {
         try { JarvisConversationService.stopScreenCapture() } catch (_: Throwable) {}
+        liveMode.value = LiveMode.NORMAL
     }
 
     /** The engine can only see the screen after the host hands it a MediaProjection. */

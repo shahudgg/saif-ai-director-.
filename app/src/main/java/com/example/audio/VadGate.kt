@@ -21,7 +21,8 @@ class VadGate(
     private val frameDurationMs: Int = 20,
     private val minSpeechDurationMs: Int = 250,
     private val endOfSpeechSilenceMs: Int = 750,
-    private val maxUtteranceMs: Int = 15000
+    private val maxUtteranceMs: Int = 15000,
+    private val minimumBargeInRms: Double = 0.0
 ) {
     companion object {
         private const val TAG = "VadGate"
@@ -47,6 +48,7 @@ class VadGate(
 
     private var ambientNoiseFloorRms: Double = BASE_NOISE_FLOOR_RMS
     private var peakSpeechRms: Double = BASE_NOISE_FLOOR_RMS
+    private var peakSpeechSnrDb: Double = 0.0
     private val onsetHistory = BooleanArray(ONSET_WINDOW_SIZE) { false }
     private var onsetHistoryIndex = 0
 
@@ -61,6 +63,7 @@ class VadGate(
     fun reset() {
         isSpeechActive = false
         peakSpeechRms = BASE_NOISE_FLOOR_RMS
+        peakSpeechSnrDb = 0.0
         voicedFrameCount = 0
         totalTurnFrameCount = 0
         silenceDurationMs = 0L
@@ -147,8 +150,9 @@ class VadGate(
         val activeSpeechFloor = if (isSpeechActive) maxOf(speechRmsThreshold, peakSpeechRms * 0.30) else speechRmsThreshold
         val isVoiced = (rms >= activeSpeechFloor) && (zcr in 0.02..0.55) && (highBandRatio > 0.008)
 
-        if (isVoiced && rms > peakSpeechRms) {
-            peakSpeechRms = rms
+        if (isVoiced) {
+            if (rms > peakSpeechRms) peakSpeechRms = rms
+            peakSpeechSnrDb = maxOf(peakSpeechSnrDb, snrDb)
         }
 
         // 4. Update sliding onset window
@@ -160,10 +164,12 @@ class VadGate(
         var isEndOfSpeech = false
         var completedTurnAudio: ByteArray? = null
         var completedDurationMs = 0L
+        var completedVoicedRatio: Float? = null
+        var completedSnrDb: Double? = null
 
         // 5. Barge-In Handling (when TTS is playing)
         if (isTtsSpeaking) {
-            val bargeInThreshold = maxOf(BASE_NOISE_FLOOR_RMS * 2.5, ambientNoiseFloorRms * 1.6 + 45.0)
+            val bargeInThreshold = maxOf(minimumBargeInRms, BASE_NOISE_FLOOR_RMS * 2.5, ambientNoiseFloorRms * 1.6 + 45.0)
             if (rms >= bargeInThreshold && snrDb >= BARGE_IN_SNR_THRESHOLD_DB && (zcr in 0.03..0.48)) {
                 if (voicedCountInWindow >= 4) {
                     isInterruption = true
@@ -228,6 +234,10 @@ class VadGate(
                         isEndOfSpeech = true
                         completedTurnAudio = turnAudioBuffer.toByteArray()
                         completedDurationMs = utteranceDurationMs
+                        // Capture turn statistics before reset and before the trailing silence
+                        // can make an otherwise valid utterance look like low-energy noise.
+                        completedVoicedRatio = if (totalTurnFrameCount > 0) voicedFrameCount.toFloat() / totalTurnFrameCount else 0f
+                        completedSnrDb = peakSpeechSnrDb
                         Log.i(TAG, "End of speech detected (total=${utteranceDurationMs}ms, voiced=${speechDurationActual}ms)")
                     } else {
                         Log.d(TAG, "Utterance discarded (voiced=${speechDurationActual}ms < min=${minSpeechDurationMs}ms)")
@@ -255,8 +265,8 @@ class VadGate(
             normalizedAmplitude = normalizedAmplitude,
             currentRms = rms,
             ambientNoiseFloorRms = ambientNoiseFloorRms,
-            snrDb = snrDb,
-            voicedRatio = voicedRatio,
+            snrDb = completedSnrDb ?: snrDb,
+            voicedRatio = completedVoicedRatio ?: voicedRatio,
             completedAudio = completedTurnAudio,
             audioDurationMs = completedDurationMs
         )

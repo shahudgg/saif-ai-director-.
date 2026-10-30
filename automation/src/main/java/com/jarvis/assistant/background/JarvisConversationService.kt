@@ -143,11 +143,18 @@ class JarvisConversationService : Service() {
         val wakeEvents: SharedFlow<Unit> = _wakeEvents.asSharedFlow()
 
         fun setMicMuted(muted: Boolean) {
-            activeInstance?.audioRecorder?.setMuted(muted)
+            activeInstance?.let { service ->
+                service.hostLiveLoop?.setMicMuted(muted)
+                service.audioRecorder?.setMuted(muted)
+            }
         }
 
         fun interruptPlayback() {
             activeInstance?.let { service ->
+                if (service.hostLiveLoop != null) {
+                    service.hostLiveLoop?.interrupt()
+                    return@let
+                }
                 if (_conversationState.value == ConversationState.SPEAKING) {
                     Log.i("JarvisService", "Manual interruption: stopping audio playback")
                     service.audioPlayer?.flush()
@@ -199,7 +206,7 @@ class JarvisConversationService : Service() {
                 runCatching { projection.stop() }
                 return false
             }
-            if (liveWebSocketReady(instance)) {
+            if (liveTransportReady(instance)) {
                 lastScreenShareError = ""
                 return reallyStartScreenCapture(projection, metrics)
             }
@@ -210,7 +217,7 @@ class JarvisConversationService : Service() {
                 var started = false
                 while (!started && System.currentTimeMillis() < deadline) {
                     val inst = activeInstance
-                    if (inst != null && liveWebSocketReady(inst)) {
+                    if (inst != null && liveTransportReady(inst)) {
                         started = reallyStartScreenCapture(projection, metrics)
                         if (!started) {
                             lastScreenShareError = "The screen capture could not be started (MediaProjection was rejected)."
@@ -236,11 +243,13 @@ class JarvisConversationService : Service() {
         ): Boolean {
             val captureManager = com.jarvis.assistant.vision.ScreenCaptureManager.getInstance()
             captureManager.onStoppedListener = {
+                activeInstance?.hostLiveLoop?.onScreenFrame(null)
                 activeInstance?.demoteFromMediaProjection()
             }
             return try {
                 captureManager.startCapture(projection, metrics) { jpegBytes ->
                     val frameInstance = activeInstance ?: return@startCapture
+                    frameInstance.hostLiveLoop?.onScreenFrame(jpegBytes)
                     if (frameInstance.canSendVideoFrame()) {
                         frameInstance.liveWebSocket?.sendMediaChunk(jpegBytes)
                     }
@@ -251,11 +260,13 @@ class JarvisConversationService : Service() {
             }
         }
 
-        private fun liveWebSocketReady(instance: JarvisConversationService): Boolean =
-            _isSessionOn.value && instance.liveWebSocket?.isSessionReady() == true
+        private fun liveTransportReady(instance: JarvisConversationService): Boolean =
+            _isSessionOn.value && (instance.hostLiveLoop != null || instance.liveWebSocket?.isSessionReady() == true)
 
         fun sendImmediateVideoFrame(jpegBytes: ByteArray) {
             val instance = activeInstance ?: return
+            if (!com.jarvis.assistant.vision.ScreenCaptureManager.getInstance().isSharing.value || jpegBytes.isEmpty()) return
+            instance.hostLiveLoop?.onScreenFrame(jpegBytes)
             val ws = instance.liveWebSocket ?: return
             // Screen imagery is opt-in. Gemini Live accepts concurrent real-time modalities,
             // including while a response or tool action is in progress.
@@ -266,6 +277,7 @@ class JarvisConversationService : Service() {
 
         fun stopScreenCapture() {
             com.jarvis.assistant.vision.ScreenCaptureManager.getInstance().stopCapture()
+            activeInstance?.hostLiveLoop?.onScreenFrame(null)
             activeInstance?.demoteFromMediaProjection()
         }
 
@@ -274,8 +286,12 @@ class JarvisConversationService : Service() {
 
         fun sendTextMessage(text: String) {
             val instance = activeInstance ?: return
-            instance.liveWebSocket?.sendClientContent(text)
-            JarvisApp.instance.chatRepository.addTurn(text, "")
+            val loop = instance.hostLiveLoop
+            if (loop != null) loop.sendText(text)
+            else {
+                instance.liveWebSocket?.sendClientContent(text)
+                JarvisApp.instance.chatRepository.addTurn(text, "")
+            }
         }
 
         fun cancelActiveTaskFromOverlay() {
@@ -295,6 +311,9 @@ class JarvisConversationService : Service() {
     private var audioRecorder: AudioRecorder? = null
     private var audioPlayer: AudioPlayer? = null
     private var liveWebSocket: GeminiLiveWebSocket? = null
+    @Volatile private var hostLiveLoop: com.jarvis.assistant.live.HostLiveTurnLoop? = null
+    private var hostStartupJob: Job? = null
+    @Volatile private var liveSessionGeneration = 0L
     private var inactivityJob: Job? = null
     private val currentTurnAssistantText = StringBuilder()
     private val currentTurnUserText = StringBuilder()
@@ -788,18 +807,6 @@ class JarvisConversationService : Service() {
             fullStop()
             return
         }
-        if (!com.jarvis.assistant.SaifAutomation.currentApi().isGemini) {
-            _liveError.value = JarvisLiveError(
-                title = "GEMINI KEY REQUIRED",
-                message = "Live voice Gemini Live par chalti hai. SAIF AI Settings me provider Gemini chuno aur Gemini API key daalo.",
-                errorCode = "API_KEY_MISSING",
-                actionText = "OPEN SETTINGS"
-            )
-            serviceScope.launch { _events.emit("Live voice needs a Gemini key (SAIF AI Settings).") }
-            fullStop()
-            return
-        }
-
         if (!PermissionHelper.hasAllRequiredPermissions(this)) {
             _liveError.value = JarvisLiveError(
                 title = "PERMISSIONS REQUIRED",
@@ -830,6 +837,82 @@ class JarvisConversationService : Service() {
         setConversationState(ConversationState.IDLE)
         updateNotification()
         headsetAudioRouter?.start()
+
+        val config = SaifAutomation.currentApi()
+        val factory = SaifAutomation.hostLiveTurnFactory
+        // Keep the original bidi socket available as an opt-in fast path. The default
+        // uses the selected app TTS voice even when Gemini is the configured provider.
+        val useNative = config.isGemini && (SaifAutomation.useGeminiNativeLive || factory == null)
+        if (!useNative) {
+            if (factory == null) {
+                _liveError.value = JarvisLiveError("VOICE ENGINE UNAVAILABLE", "The host voice engine is not available.", "VOICE_ENGINE_UNAVAILABLE", "RETRY")
+                fullStop()
+                return
+            }
+            val generation = ++liveSessionGeneration
+            _connectionStatus.value = "STARTING"
+            hostStartupJob = serviceScope.launch(Dispatchers.IO) {
+                try {
+                    val prompt = generateCurrentSystemPrompt()
+                    if (!_isSessionOn.value || generation != liveSessionGeneration) return@launch
+                    val listener = object : com.jarvis.assistant.live.HostLiveTurnListener {
+                        private fun active() = _isSessionOn.value && generation == liveSessionGeneration
+                        override fun onState(state: ConversationState) {
+                            if (active()) setConversationState(state)
+                        }
+                        override fun onUserTranscript(text: String) {
+                            if (active()) {
+                                _liveUserTranscript.value = text
+                                if (text.isNotBlank()) _liveError.value = null
+                            }
+                        }
+                        override fun onAssistantTranscript(text: String) {
+                            if (active()) _liveAssistantResponse.value = text
+                        }
+                        override fun onAudioLevel(level: Float) {
+                            if (active()) _audioLevel.value = level.coerceIn(0f, 1f)
+                        }
+                        override fun onActivity() {
+                            if (active()) lastUserSpeechDetectedTime = System.currentTimeMillis()
+                        }
+                        override fun onTurnCompleted(user: String, assistant: String) {
+                            if (!active() || user.isBlank() || assistant.isBlank()) return
+                            app.chatRepository.addTurn(user, assistant)
+                            app.memoryManager.addShortTermTurn(user, assistant)
+                            app.memoryManager.learnPreferencesFromConversation(user)
+                        }
+                        override fun onError(error: JarvisLiveError) {
+                            if (active()) {
+                                _liveError.value = error
+                                serviceScope.launch { _events.emit(error.message) }
+                            }
+                        }
+                    }
+                    val loop = factory(this@JarvisConversationService, prompt, listener)
+                    if (!_isSessionOn.value || generation != liveSessionGeneration) return@launch
+                    hostLiveLoop = loop
+                    if (!loop.start()) {
+                        if (generation == liveSessionGeneration) fullStop()
+                        return@launch
+                    }
+                    if (generation != liveSessionGeneration || !_isSessionOn.value) {
+                        loop.stop()
+                        return@launch
+                    }
+                    _connectionStatus.value = "LIVE"
+                    updateNotification()
+                    if (wakeTriggered) loop.sendText("Hello")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (generation == liveSessionGeneration && _isSessionOn.value) {
+                        _liveError.value = JarvisLiveError("VOICE ENGINE FAILED", e.message ?: "Could not start live voice.", "VOICE_ENGINE_FAILED", "RETRY")
+                        fullStop()
+                    }
+                }
+            }
+            return
+        }
 
         audioPlayer = AudioPlayer(
             onPlaybackStateChanged = { isPlaying ->
@@ -2945,6 +3028,12 @@ class JarvisConversationService : Service() {
     }
 
     private fun stopActiveConversation() {
+        liveSessionGeneration++
+        hostStartupJob?.cancel()
+        hostStartupJob = null
+        hostLiveLoop?.stop()
+        hostLiveLoop = null
+        if (com.jarvis.assistant.vision.ScreenCaptureManager.getInstance().isSharing.value) stopScreenCapture()
         inactivityJob?.cancel()
         inactivityJob = null
         cancelAllActiveTools()

@@ -107,6 +107,35 @@ object VoskModelManager {
         }
     }
 
+    /** Recognise one already-captured 16 kHz PCM turn without taking ownership of the microphone. */
+    fun transcribePcm(pcm: ByteArray): String? {
+        val loaded = model ?: return null
+        if (pcm.isEmpty()) return null
+        var recognizer: org.vosk.Recognizer? = null
+        return try {
+            recognizer = org.vosk.Recognizer(loaded, 16000.0f)
+            val parts = mutableListOf<String>()
+            var offset = 0
+            while (offset < pcm.size) {
+                val length = minOf(4096, pcm.size - offset)
+                val chunk = pcm.copyOfRange(offset, offset + length)
+                if (recognizer.acceptWaveForm(chunk, length)) {
+                    org.json.JSONObject(recognizer.result).optString("text").trim()
+                        .takeIf { it.isNotEmpty() }?.let { parts.add(it) }
+                }
+                offset += length
+            }
+            org.json.JSONObject(recognizer.finalResult).optString("text").trim()
+                .takeIf { it.isNotEmpty() }?.let { parts.add(it) }
+            parts.joinToString(" ").takeIf { it.isNotBlank() }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Offline transcription failed: ${e.message}")
+            null
+        } finally {
+            try { recognizer?.close() } catch (_: Exception) {}
+        }
+    }
+
     private fun hasBundledFile(assetManager: AssetManager, path: String): Boolean =
         try {
             assetManager.open(path).use { true }

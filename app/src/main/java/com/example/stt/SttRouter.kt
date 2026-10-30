@@ -9,7 +9,12 @@ import com.example.data.local.ProviderSettingsManager
 import com.example.data.remote.AIApiUtility
 import com.example.data.remote.ModelResolver
 import com.example.data.remote.ModelRole
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -119,10 +124,10 @@ object SttRouter {
         // Find candidate STT routes based on configured provider and keys
         val candidates = resolveSttCandidates(state.providerName, userKeys)
 
-        if (candidates.isEmpty()) {
-            val errorMsg = "Voice input ke liye Settings (⚙️) ➔ AI Provider me Groq, OpenAI ya Gemini API key add karein."
-            Log.w(TAG, errorMsg)
-            return@withContext SttResult("", rejectedReason = errorMsg)
+        // Providers such as Anthropic and OpenRouter do not expose an STT endpoint.
+        // The existing Vosk model is used on-device instead of requiring a second API key.
+        if (candidates.isEmpty() && context != null) {
+            com.jarvis.assistant.audio.VoskModelManager.init(context.applicationContext, CoroutineScope(SupervisorJob() + Dispatchers.IO))
         }
 
         val vocabPrompt = buildVocabularyPrompt(profile, context)
@@ -197,12 +202,35 @@ object SttRouter {
                         )
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 lastFailureReason = e.message ?: "Network error"
                 Log.w(TAG, "Attempt with ${candidate.service} failed: $lastFailureReason")
             }
         }
 
+        val vosk = com.jarvis.assistant.audio.VoskModelManager
+        if (!vosk.isModelReady.value && candidates.isEmpty() && context != null) {
+            withTimeoutOrNull(20_000L) { vosk.isModelReady.first { it } }
+        }
+        if (vosk.isModelReady.value) {
+            // AudioPrep writes a standard 44-byte PCM WAV header for live turns.
+            val pcm = if (wavBytes.size > 44 && String(wavBytes, 0, 4, Charsets.US_ASCII) == "RIFF")
+                wavBytes.copyOfRange(44, wavBytes.size) else wavBytes
+            val raw = vosk.transcribePcm(pcm).orEmpty()
+            val decision = TranscriptGuard.evaluate(raw, durationMs, snrDb = snrDb, voicedRatio = voicedRatio)
+            if (decision.isAccepted) {
+                return@withContext SttResult(
+                    text = TranscriptRepair.repair(decision.sanitizedText, context),
+                    provider = "Vosk (on device)", model = "vosk-model-small-en-us",
+                    latencyMs = System.currentTimeMillis() - start
+                )
+            }
+            if (raw.isNotBlank()) lastFailureReason = decision.rejectionReason ?: "No speech recognised"
+        } else if (candidates.isEmpty()) {
+            lastFailureReason = "Offline speech model is not ready. Connect to the internet to download it, or add an OpenAI, Groq or Gemini speech key."
+        }
         SttResult("", latencyMs = System.currentTimeMillis() - start, rejectedReason = lastFailureReason)
     }
 
@@ -251,7 +279,7 @@ object SttRouter {
             val adminKey = adminConfig.defaultApiKey.trim()
             if (adminKey.startsWith("gsk_")) {
                 candidates.add(SttCandidate(SttServiceType.GROQ, adminKey, "whisper-large-v3"))
-            } else if (adminKey.startsWith("sk-") && !adminKey.startsWith("sk-or-") && !adminKey.startsWith("xai-")) {
+            } else if (adminKey.startsWith("sk-") && !adminKey.startsWith("sk-or-") && !adminKey.startsWith("sk-ant-") && !adminKey.startsWith("xai-")) {
                 candidates.add(SttCandidate(SttServiceType.OPENAI, adminKey, "whisper-1"))
             } else if (adminKey.startsWith("AIza")) {
                 candidates.add(SttCandidate(SttServiceType.GEMINI, adminKey, ModelResolver.resolve(ModelRole.TRANSCRIBE)))

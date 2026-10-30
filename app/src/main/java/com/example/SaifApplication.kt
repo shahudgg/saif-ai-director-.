@@ -34,6 +34,9 @@ class SaifApplication : Application() {
 
         // The live engine speaks with the voice the user picked in SAIF AI Settings (SAIF ADVANCE VOICE by default),
         // not with a voice chosen inside the automation module.
+        SaifAutomation.hostLiveTurnFactory = { context, prompt, listener ->
+            com.example.live.LiveTurnLoop(context, prompt, listener)
+        }
         SaifAutomation.hostVoiceResolver = { com.example.utils.SaifVoice.liveVoiceName(this) }
         SaifAutomation.hostMemoryResolver = { feature -> com.example.util.SaifMemoryCore.promptBlock(feature) }
         SaifAutomation.hostAutoLanguageResolver = { com.example.util.SaifMemoryCore.autoLanguage.value }
