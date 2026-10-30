@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -47,7 +47,50 @@ jobs:
       env:
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      run: gradle assembleDebug --no-daemon
+      shell: bash
+      run: |
+        set -o pipefail
+        gradle assembleDebug --no-daemon 2>&1 | tee /tmp/build.log
+
+    # Keeps the compiler errors readable from outside the Actions log viewer:
+    # they are published as annotations and pushed to the `ci-errors` branch.
+    - name: Publish compile errors
+      if: failure()
+      shell: bash
+      run: |
+        mkdir -p ci-logs
+        {
+          echo "#### e:/w: LINES ####"
+          grep -E "^(e:|w:) " /tmp/build.log || echo "(none)"
+          echo
+          echo "#### FAILED TASK / SUMMARY ####"
+          grep -E "^> Task .*FAILED|^FAILURE:|Execution failed for task|What went wrong|^Caused by:|BUILD FAILED" /tmp/build.log || true
+          echo
+          echo "#### LAST 250 LINES ####"
+          tail -250 /tmp/build.log
+        } > ci-logs/compile-errors.txt || true
+
+        python3 - <<'PYEOF' || true
+        import os
+        p = "ci-logs/compile-errors.txt"
+        if not os.path.exists(p):
+            raise SystemExit(0)
+        text = open(p, encoding="utf-8", errors="replace").read()
+        n, size = 10, max(1, (len(text) + 9) // 10)
+        for i in range(n):
+            chunk = text[i * size:(i + 1) * size]
+            if not chunk:
+                continue
+            esc = chunk.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+            print("::error::PART %d/%d %s" % (i + 1, n, esc))
+        PYEOF
+
+        git config user.name  "ci-diagnostics"
+        git config user.email "ci-diagnostics@users.noreply.github.com"
+        git checkout -B ci-errors
+        git add -f ci-logs/compile-errors.txt
+        git commit -m "ci: compile errors $(date -u +%FT%TZ)" || echo "nothing to commit"
+        git push -f origin ci-errors || echo "::warning::could not push ci-errors branch"
 
     # Unit tests run after the APK is built, so a failing test never hides the APK. Results are uploaded either way.
     - name: Run unit tests
