@@ -174,7 +174,7 @@ object SceneRenderer {
                 if (e.fx == "shadow3d") {
                     val depth = (tp.textSize * 0.16f).toInt().coerceAtLeast(2)
                     for (k in depth downTo 1) {
-                        val sp = Paint(tp).apply { color = 0xFF000000.toInt(); this.alpha = (alpha * 90).toInt() }
+                        val sp = Paint(tp).apply { this.color = 0xFF000000.toInt(); this.alpha = (alpha * 90).toInt() }
                         wrap(shown, tp, maxW).forEachIndexed { i, line -> canvas.drawText(line, k.toFloat(), i * tp.textSize * 1.2f + k, sp) }
                     }
                 }
@@ -442,7 +442,7 @@ object SceneRenderer {
                     append(e.text.take(locked))
                     for (i in locked until total) {
                         val c = e.text[i]
-                        append(if (c == ' ') ' ' else GLYPHS[((t / 60L + i) % GLYPHS.length).toInt().coerceAtLeast(0)])
+                        append(if (c == ' ') ' ' else GLYPHS[((t / 60L + i) % GLYPHS.size).toInt().coerceAtLeast(0)])
                     }
                 }
             }

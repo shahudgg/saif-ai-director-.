@@ -147,9 +147,9 @@ private fun gradeFilter(e: ItemEffects): ColorFilter? {
         floatArrayOf(0f, 0f, 0f, 1f, 0f)
     )
     val m = ColorMatrix()
-    for (row in 0..2) for (col in 0..2) m[row * 5 + col] = (sat[row][col] * s) * c + (if (row == col) (1f - s) * c else 0f)
-    for (row in 0..2) m[row * 5 + 4] = t
-    m[18] = 1f
+    for (row in 0..2) for (col in 0..2) m.set(row, col, (sat[row][col] * s) * c + (if (row == col) (1f - s) * c else 0f))
+    for (row in 0..2) m.set(row, 4, t)
+    m.set(3, 3, 1f)
     return ColorFilter.colorMatrix(m)
 }
 

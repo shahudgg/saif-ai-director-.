@@ -169,7 +169,13 @@ object LayerEffects {
         if (neutral) return null
         val m = ColorMatrix()
         // brightness (0..2, 1 = unchanged)
-        m.postTranslate((b - 1f) * 90f, (b - 1f) * 90f, (b - 1f) * 90f, 0f)
+        val tr = (b - 1f) * 90f
+        m.postConcat(ColorMatrix(floatArrayOf(
+            1f, 0f, 0f, 0f, tr,
+            0f, 1f, 0f, 0f, tr,
+            0f, 0f, 1f, 0f, tr,
+            0f, 0f, 0f, 1f, 0f
+        )))
         // contrast around the mid grey
         if (abs(c - 1f) >= 0.005f) {
             val t = (1f - c) * 127.5f
@@ -182,7 +188,7 @@ object LayerEffects {
             m.postConcat(cm)
         }
         if (abs(s - 1f) >= 0.005f) { val sm = ColorMatrix(); sm.setSaturation(s); m.postConcat(sm) }
-        if (abs(hDeg) >= 0.5f) { val hm = ColorMatrix(); hm.postRotate(hDeg); m.postConcat(hm) }
+        if (abs(hDeg) >= 0.5f) { val hm = ColorMatrix(); hm.setRotate(0, hDeg); m.postConcat(hm) }
         return ColorMatrixColorFilter(m)
     }
 

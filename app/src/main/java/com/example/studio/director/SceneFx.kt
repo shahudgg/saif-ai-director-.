@@ -54,7 +54,7 @@ object SceneFx {
         var x = (seed * 374761393 + i * 668265263 + k * 2147483647L).toInt()
         x = (x xor (x shr 13)) * 1274126177
         x = x xor (x shr 16)
-        return (x and 0x7FFFFF).toFloat() / 0x7FFFFFp0f
+        return (x and 0x7FFFFF).toFloat() / 0x7FFFFF.toFloat()
     }
 
     private fun withAlpha(c: Int, a: Int): Int = (c and 0x00FFFFFF) or (a.coerceIn(0, 255) shl 24)
@@ -420,7 +420,7 @@ object SceneFx {
                 val cw = ew / cols; val ch = eh / rows
                 for (r in 0 until rows) for (c in 0 until cols) {
                     val idx = r * cols + c
-                    val v = (e.values.getOrNull(idx) ?: hash(e.seed, r * 17 + c, 3, 1)).coerceIn(0f, 1f)
+                    val v = (e.values.getOrNull(idx) ?: hash(e.seed, (r * 17 + c) * 3, 1)).coerceIn(0f, 1f)
                     val appear = ((p * (cols + rows)) - (c + r) * 0.35f).coerceIn(0f, 1f)
                     if (appear <= 0.02f) continue
                     val box = RectF(-ew / 2 + c * cw + 1f, -eh / 2 + r * ch + 1f, -ew / 2 + (c + 1) * cw - 1f, -eh / 2 + (r + 1) * ch - 1f)
