@@ -74,13 +74,34 @@ object SceneRenderer {
         val zoom = c.zoomFrom + (c.zoomTo - c.zoomFrom) * ease(prog, "easeInOut")
         val panX = (c.panXFrom + (c.panXTo - c.panXFrom) * prog) * w
         val panY = (c.panYFrom + (c.panYTo - c.panYFrom) * prog) * h
+        fun bounded(value: Float, min: Float, max: Float) = if (value.isFinite()) value.coerceIn(min, max) else 0f
+        val pose = SpatialPose(
+            bounded(c.dollyFrom + (c.dollyTo - c.dollyFrom) * prog, -1f, 1f),
+            bounded(c.orbitFrom + (c.orbitTo - c.orbitFrom) * prog, -75f, 75f),
+            bounded(c.tiltFrom + (c.tiltTo - c.tiltFrom) * prog, -75f, 75f)
+        )
         canvas.save()
         canvas.translate(w / 2f + panX, h / 2f + panY); canvas.scale(zoom, zoom); canvas.translate(-w / 2f, -h / 2f)
-        g.elements.forEach { drawElement(canvas, w, h, it, tMs, opacity) }
+        // Sort in camera space (not just source depth): an orbit can move a side layer behind another.
+        // The sort is stable, so old scenes with zero depth keep their original stacking.
+        g.elements.sortedBy { cameraDepth(it, w, h, tMs, pose) }.forEach { drawElement(canvas, w, h, it, tMs, opacity, pose) }
         canvas.restore()
     }
 
-    private fun drawElement(canvas: Canvas, w: Float, h: Float, e: Element, tMs: Long, sceneOpacity: Float) {
+    private data class SpatialPose(val dolly: Float, val orbit: Float, val tilt: Float)
+
+    private fun cameraDepth(e: Element, w: Float, h: Float, tMs: Long, camera: SpatialPose): Float {
+        val side = min(w, h)
+        val rawDepth = resolve(e, "depth", e.depth, tMs)
+        val depth = if (rawDepth.isFinite()) rawDepth.coerceIn(-1f, 1f) else 0f
+        if (camera.orbit == 0f && camera.tilt == 0f) return depth
+        val (dx, dy) = SceneFx.pathOffset(e, tMs, side)
+        val x = resolve(e, "x", e.x, tMs) * w + dx - w / 2f
+        val y = resolve(e, "y", e.y, tMs) * h + dy - h / 2f
+        return SpatialMath.rotate(SpatialMath.Vec3(x, y, depth * side), camera.tilt, camera.orbit).z
+    }
+
+    private fun drawElement(canvas: Canvas, w: Float, h: Float, e: Element, tMs: Long, sceneOpacity: Float, camera: SpatialPose) {
         val alpha = resolve(e, "alpha", if (e.anims.any { it.prop == "alpha" }) 0f else 1f, tMs).coerceIn(0f, 1f) * sceneOpacity
         if (alpha <= 0.002f) return
         val x = resolve(e, "x", e.x, tMs) * w
@@ -98,9 +119,23 @@ object SceneRenderer {
         }
         // Round 9: an element can carry its own blend mode, and can float/orbit on a motion path.
         blendXfer(e.blend)?.let { xf -> fill.xfermode = xf; stroke.xfermode = xf }
-        val (pdx, pdy) = SceneFx.pathOffset(e, tMs, min(w, h))
+        val side = min(w, h)
+        val (pdx, pdy) = SceneFx.pathOffset(e, tMs, side)
+        val depth = resolve(e, "depth", e.depth, tMs).let { if (it.isFinite()) it.coerceIn(-1f, 1f) else 0f }
+        val centre = SpatialMath.rotate(SpatialMath.Vec3(x + pdx - w / 2f, y + pdy - h / 2f, depth * side), camera.tilt, camera.orbit)
+        val projected = SpatialMath.project(centre.copy(z = centre.z + camera.dolly * side), side * 3.2f)
         canvas.save()
-        canvas.translate(x + pdx, y + pdy); canvas.rotate(rot); canvas.scale(scale, scale)
+        canvas.translate(w / 2f + projected.x, h / 2f + projected.y); canvas.rotate(rot)
+        canvas.scale(scale * projected.scale, scale * projected.scale)
+        if (Scene3DFx.handles(e.type)) {
+            val geo = SceneFx.Geo(ew, eh, alpha, progress, tMs, w, h, color,
+                parseColor(e.color2.ifBlank { e.color }), side)
+            val pitch = resolve(e, "rotationX", e.rotationX, tMs).let { if (it.isFinite()) it.coerceIn(-360f, 360f) else 0f } + camera.tilt
+            val yaw = resolve(e, "rotationY", e.rotationY, tMs).let { if (it.isFinite()) it.coerceIn(-360f, 360f) else 0f } + camera.orbit
+            Scene3DFx.draw(canvas, e, geo, fill, pitch, yaw)
+            canvas.restore()
+            return
+        }
         // The advanced primitives are drawn by SceneFx, which also applies their glow / shadow / gradient.
         if (SceneFx.handles(e.type)) {
             val geo = SceneFx.Geo(ew, eh, alpha, progress, tMs, w, h, color,
