@@ -128,6 +128,16 @@ fun SaifAiApp(
             if (started) "SAIF AI ab aapki screen dekh kar madad karega." else "Screen share start nahi ho paya.",
             android.widget.Toast.LENGTH_LONG
         ).show()
+        // Screen capture is queued until the live socket opens. If it never does, say exactly why instead of
+        // leaving the owner with a silent "nothing happened".
+        if (started) {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                val reason = com.jarvis.assistant.SaifAutomation.lastScreenShareError
+                if (reason.isNotBlank()) {
+                    android.widget.Toast.makeText(context, "Screen share: $reason", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }, 9_000L)
+        }
     }
     var activeVideoProjectData by remember { mutableStateOf<com.example.ui.components.VideoProjectData?>(null) }
     var showVideoStudio by remember { mutableStateOf(false) }

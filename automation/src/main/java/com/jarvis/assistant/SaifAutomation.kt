@@ -222,6 +222,14 @@ object SaifAutomation {
     fun startScreenShare(projection: android.media.projection.MediaProjection, metrics: android.util.DisplayMetrics): Boolean =
         try { JarvisConversationService.startScreenCapture(projection, metrics) } catch (_: Throwable) { false }
 
+    /** Why the last screen-share attempt failed ("" when it worked or is still starting). */
+    val lastScreenShareError: String
+        get() = JarvisConversationService.lastScreenShareError
+
+    /** True once frames are really flowing to the engine. */
+    val isScreenSharingNow: StateFlow<Boolean>
+        get() = com.jarvis.assistant.vision.ScreenCaptureManager.getInstance().isSharing
+
     fun stopScreenShare() {
         try { JarvisConversationService.stopScreenCapture() } catch (_: Throwable) {}
     }

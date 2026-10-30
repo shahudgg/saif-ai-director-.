@@ -175,24 +175,79 @@ class JarvisConversationService : Service() {
             activeInstance?.demoteFromMediaProjection()
         }
 
-        fun startScreenCapture(projection: android.media.projection.MediaProjection, metrics: android.util.DisplayMetrics): Boolean {
-            val instance = activeInstance ?: run {
-                projection.stop()
+        /**
+         * Why the last screen-share attempt failed ("" when it worked). The host shows this instead of a
+         * silent "nothing happened", which is what the owner used to see.
+         */
+        @Volatile var lastScreenShareError: String = ""
+            private set
+
+        /**
+         * Starts screen capture. The host asks for the MediaProjection and then calls this immediately, but the
+         * live socket usually needs a few seconds to connect - the old code returned false in that window, so
+         * tapping "share screen" right after starting a session looked like it did nothing at all.
+         * The session is therefore awaited (off the main thread, up to [waitMs]) before capture really starts.
+         */
+        fun startScreenCapture(
+            projection: android.media.projection.MediaProjection,
+            metrics: android.util.DisplayMetrics,
+            waitMs: Long = 25_000L
+        ): Boolean {
+            val instance = activeInstance
+            if (instance == null) {
+                lastScreenShareError = "Live session is not running. Start a live session first, then share the screen."
+                runCatching { projection.stop() }
                 return false
             }
-            if (liveWebSocketReady(instance).not()) {
-                projection.stop()
-                return false
+            if (liveWebSocketReady(instance)) {
+                lastScreenShareError = ""
+                return reallyStartScreenCapture(projection, metrics)
             }
+            // Optimistic: capture is queued until the socket is ready, and the reason is reported if it never is.
+            lastScreenShareError = "Waiting for the live connection to open the screen channel…"
+            Thread({
+                val deadline = System.currentTimeMillis() + waitMs
+                var started = false
+                while (!started && System.currentTimeMillis() < deadline) {
+                    val inst = activeInstance
+                    if (inst != null && liveWebSocketReady(inst)) {
+                        started = reallyStartScreenCapture(projection, metrics)
+                        if (!started) {
+                            lastScreenShareError = "The screen capture could not be started (MediaProjection was rejected)."
+                        }
+                        break
+                    }
+                    runCatching { Thread.sleep(250L) }
+                }
+                if (started) {
+                    lastScreenShareError = ""
+                } else if (!lastScreenShareError.startsWith("The screen capture")) {
+                    lastScreenShareError = "The live connection did not open within ${waitMs / 1000}s, so the screen was not shared. " +
+                        "Check the API key / network, then tap share screen again."
+                    runCatching { projection.stop() }
+                }
+            }, "saif-screen-share").start()
+            return true
+        }
+
+        private fun reallyStartScreenCapture(
+            projection: android.media.projection.MediaProjection,
+            metrics: android.util.DisplayMetrics
+        ): Boolean {
             val captureManager = com.jarvis.assistant.vision.ScreenCaptureManager.getInstance()
             captureManager.onStoppedListener = {
                 activeInstance?.demoteFromMediaProjection()
             }
-            return captureManager.startCapture(projection, metrics) { jpegBytes ->
-                val frameInstance = activeInstance ?: return@startCapture
-                if (frameInstance.canSendVideoFrame()) {
-                    frameInstance.liveWebSocket?.sendMediaChunk(jpegBytes)
+            return try {
+                captureManager.startCapture(projection, metrics) { jpegBytes ->
+                    val frameInstance = activeInstance ?: return@startCapture
+                    if (frameInstance.canSendVideoFrame()) {
+                        frameInstance.liveWebSocket?.sendMediaChunk(jpegBytes)
+                    }
                 }
+            } catch (t: Throwable) {
+                lastScreenShareError = "Screen capture failed: ${t.javaClass.simpleName}"
+                false
             }
         }
 
