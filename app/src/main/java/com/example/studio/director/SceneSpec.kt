@@ -36,12 +36,14 @@ val SUPPORTED_ELEMENT_TYPES = setOf(
     "orbit",         // a core with satellites travelling on elliptical orbits
     "stack",         // stacked-area / layered bands showing composition
     "badge",         // shield/rosette badge with a short label and a star
-    "barcode"       // vertical bars of varying width (data/ID motif)
+    "barcode",       // vertical bars of varying width (data/ID motif)
+    // Canvas-only spatial primitives. These are projected meshes, not executable code or WebGL.
+    "depthStack", "parallax", "extrusion", "perspectiveQuad", "perspectiveCard", "cube"
 )
 /** Text effects for type "text" through Element.fx. */
 val SUPPORTED_TEXT_FX = setOf("", "rise", "pop", "fade", "typewriter", "words", "counter", "glow", "outline",
     "scramble", "slide", "scale", "blur", "neon", "shadow3d", "karaoke", "bounce")
-val SUPPORTED_ANIM_PROPS = setOf("x", "y", "w", "h", "alpha", "scale", "rotation", "progress", "value")
+val SUPPORTED_ANIM_PROPS = setOf("x", "y", "w", "h", "alpha", "scale", "rotation", "rotationX", "rotationY", "depth", "progress", "value")
 val SUPPORTED_EASINGS = setOf("linear", "easeIn", "easeOut", "easeInOut", "overshoot", "expoOut", "backOut", "bounce", "spring", "cubicInOut")
 val SUPPORTED_TRANSITIONS = setOf(
     "none", "fade", "slideLeft", "slideUp", "zoom", "wipe", "dissolve",
@@ -88,7 +90,10 @@ data class Element(
     /** 0..1 opacity of the element's own outline (0 = filled only, 1 = outline only). */
     val outline: Float = 0f,
     /** Free-form motion path for orbiting/floating elements: "linear", "sine", "circle", "figure8", "drift". */
-    val path: String = ""
+    val path: String = "",
+    /** Spatial coordinates and material controls. Positive depth is closer to the viewer. */
+    val depth: Float = 0f, val rotationX: Float = 0f, val rotationY: Float = 0f,
+    val extrusion: Float = 0.2f, val specular: Float = 0.4f, val rimLight: Float = 0.25f
 )
 
 /** Blend modes an element may use (mirrors the timeline's `ItemTransform.blendMode`). */
@@ -104,6 +109,9 @@ val SUPPORTED_ELEMENT_ALIGNS = setOf("center", "left", "right")
  * Every number a model can send is clamped here, once, so a nonsense reply can never push an element outside the
  * frame, make a stroke invisible, or ask the renderer for a billion particles.
  */
+private fun Float.spatialBound(min: Float, max: Float, fallback: Float = 0f): Float =
+    if (isFinite()) coerceIn(min, max) else fallback
+
 fun Element.clamped(): Element = copy(
     x = x.coerceIn(-0.5f, 1.5f), y = y.coerceIn(-0.5f, 1.5f),
     w = w.coerceIn(0f, 3f), h = h.coerceIn(0f, 3f),
@@ -117,6 +125,9 @@ fun Element.clamped(): Element = copy(
     align = if (align in SUPPORTED_ELEMENT_ALIGNS) align else "center",
     dash = dash.coerceIn(0f, 1f), outline = outline.coerceIn(0f, 1f),
     path = if (path in SUPPORTED_ELEMENT_PATHS) path else "",
+    depth = depth.spatialBound(-1f, 1f), rotationX = rotationX.spatialBound(-360f, 360f),
+    rotationY = rotationY.spatialBound(-360f, 360f), extrusion = extrusion.spatialBound(0f, 1f, 0.2f),
+    specular = specular.spatialBound(0f, 1f, 0.4f), rimLight = rimLight.spatialBound(0f, 1f, 0.25f),
     values = if (values.size > 40) values.take(40) else values,
     labels = if (labels.size > 40) labels.take(40) else labels,
     anims = if (anims.size > 14) anims.take(14) else anims,
@@ -125,7 +136,11 @@ fun Element.clamped(): Element = copy(
 
 data class CameraMove(
     val zoomFrom: Float = 1f, val zoomTo: Float = 1f,
-    val panXFrom: Float = 0f, val panXTo: Float = 0f, val panYFrom: Float = 0f, val panYTo: Float = 0f
+    val panXFrom: Float = 0f, val panXTo: Float = 0f, val panYFrom: Float = 0f, val panYTo: Float = 0f,
+    /** Dolly is in frame-short-side units; orbit and tilt are degrees. Defaults preserve old scenes. */
+    val dollyFrom: Float = 0f, val dollyTo: Float = 0f,
+    val orbitFrom: Float = 0f, val orbitTo: Float = 0f,
+    val tiltFrom: Float = 0f, val tiltTo: Float = 0f
 )
 
 data class SceneGraph(
@@ -354,7 +369,10 @@ object SceneJson {
             camera = if (cam == null) CameraMove() else CameraMove(
                 cam.optDouble("zoomFrom", 1.0).toFloat(), cam.optDouble("zoomTo", 1.0).toFloat(),
                 cam.optDouble("panXFrom", 0.0).toFloat(), cam.optDouble("panXTo", 0.0).toFloat(),
-                cam.optDouble("panYFrom", 0.0).toFloat(), cam.optDouble("panYTo", 0.0).toFloat()),
+                cam.optDouble("panYFrom", 0.0).toFloat(), cam.optDouble("panYTo", 0.0).toFloat(),
+                cam.optDouble("dollyFrom", 0.0).toFloat().spatialBound(-1f, 1f), cam.optDouble("dollyTo", 0.0).toFloat().spatialBound(-1f, 1f),
+                cam.optDouble("orbitFrom", 0.0).toFloat().spatialBound(-75f, 75f), cam.optDouble("orbitTo", 0.0).toFloat().spatialBound(-75f, 75f),
+                cam.optDouble("tiltFrom", 0.0).toFloat().spatialBound(-75f, 75f), cam.optDouble("tiltTo", 0.0).toFloat().spatialBound(-75f, 75f)),
             elements = (0 until els.length()).map { parseElement(els.getJSONObject(it), it) }
         )
     }
@@ -388,7 +406,11 @@ object SceneJson {
         align = o.optString("align", "center").ifBlank { "center" },
         dash = o.optDouble("dash", 0.0).toFloat().coerceIn(0f, 1f),
         outline = o.optDouble("outline", 0.0).toFloat().coerceIn(0f, 1f),
-        path = o.optString("path", "")
+        path = o.optString("path", ""),
+        depth = o.optDouble("depth", 0.0).toFloat(),
+        rotationX = o.optDouble("rotationX", 0.0).toFloat(), rotationY = o.optDouble("rotationY", 0.0).toFloat(),
+        extrusion = o.optDouble("extrusion", 0.2).toFloat(), specular = o.optDouble("specular", 0.4).toFloat(),
+        rimLight = o.optDouble("rimLight", 0.25).toFloat()
     ).clamped()
 
     // ---- serialization (round-trips through CodeSceneItem.htmlCode so old projects keep loading) ----
@@ -399,6 +421,12 @@ object SceneJson {
             put("zoomFrom", g.camera.zoomFrom.toDouble()); put("zoomTo", g.camera.zoomTo.toDouble())
             put("panXFrom", g.camera.panXFrom.toDouble()); put("panXTo", g.camera.panXTo.toDouble())
             put("panYFrom", g.camera.panYFrom.toDouble()); put("panYTo", g.camera.panYTo.toDouble())
+            if (g.camera.dollyFrom != 0f) put("dollyFrom", g.camera.dollyFrom.toDouble())
+            if (g.camera.dollyTo != 0f) put("dollyTo", g.camera.dollyTo.toDouble())
+            if (g.camera.orbitFrom != 0f) put("orbitFrom", g.camera.orbitFrom.toDouble())
+            if (g.camera.orbitTo != 0f) put("orbitTo", g.camera.orbitTo.toDouble())
+            if (g.camera.tiltFrom != 0f) put("tiltFrom", g.camera.tiltFrom.toDouble())
+            if (g.camera.tiltTo != 0f) put("tiltTo", g.camera.tiltTo.toDouble())
         })
         put("elements", JSONArray().apply { g.elements.forEach { put(elementToJson(it)) } })
     }
@@ -426,6 +454,12 @@ object SceneJson {
         if (e.dash > 0f) put("dash", e.dash.toDouble())
         if (e.outline > 0f) put("outline", e.outline.toDouble())
         if (e.path.isNotBlank()) put("path", e.path)
+        if (e.depth != 0f) put("depth", e.depth.toDouble())
+        if (e.rotationX != 0f) put("rotationX", e.rotationX.toDouble())
+        if (e.rotationY != 0f) put("rotationY", e.rotationY.toDouble())
+        if (e.extrusion != 0.2f) put("extrusion", e.extrusion.toDouble())
+        if (e.specular != 0.4f) put("specular", e.specular.toDouble())
+        if (e.rimLight != 0.25f) put("rimLight", e.rimLight.toDouble())
     }
 
     /** Stored payload: marker line + JSON so it can live in CodeSceneItem.htmlCode. */
