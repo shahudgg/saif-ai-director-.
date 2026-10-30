@@ -7,6 +7,7 @@ import java.io.File
 import com.example.ui.components.*
 import com.example.data.local.ChatMessageEntity
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
@@ -106,37 +107,55 @@ fun SaifAiApp(
             android.widget.Toast.makeText(context, "Screen share ke liye permission chahiye thi.", android.widget.Toast.LENGTH_LONG).show()
             return@rememberLauncherForActivityResult
         }
-        val mpm = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-        val projection = mpm.getMediaProjection(result.resultCode, data)
-        if (projection == null) {
+        // Android 14+ requires a running media-projection foreground service BEFORE
+        // getMediaProjection(). Starting the service is asynchronous, so await it.
+        scope.launch {
+            val automation = com.jarvis.assistant.SaifAutomation
+            if (!automation.isLiveRunning.value && !automation.startLive(context, com.jarvis.assistant.SaifAutomation.LiveMode.SCREEN_SHARE, isLightMode)) {
+                com.example.ui.components.SaifLiveSession.pendingScreenShare = false
+                return@launch
+            }
+            val ready = kotlinx.coroutines.withTimeoutOrNull(10_000L) {
+                automation.isLiveRunning.first { it }
+                true
+            } ?: false
+            if (!ready || !com.jarvis.assistant.background.JarvisConversationService.elevateToMediaProjection()) {
+                com.example.ui.components.SaifLiveSession.pendingScreenShare = false
+                android.widget.Toast.makeText(context, "Screen capture service start nahi ho payi.", android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val mpm = context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+            val projection = try { mpm.getMediaProjection(result.resultCode, data) } catch (_: Exception) { null }
+            if (projection == null) {
+                com.jarvis.assistant.background.JarvisConversationService.demoteFromMediaProjection()
+                com.example.ui.components.SaifLiveSession.pendingScreenShare = false
+                android.widget.Toast.makeText(context, "MediaProjection nahi mila.", android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            val metrics = android.util.DisplayMetrics().also { dm ->
+                @Suppress("DEPRECATION")
+                (context.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealMetrics(dm)
+            }
+            val started = automation.startScreenShare(projection, metrics)
+            if (started) automation.liveMode.value = com.jarvis.assistant.SaifAutomation.LiveMode.SCREEN_SHARE
+            else {
+                com.jarvis.assistant.background.JarvisConversationService.demoteFromMediaProjection()
+                runCatching { projection.stop() }
+            }
             com.example.ui.components.SaifLiveSession.pendingScreenShare = false
-            android.widget.Toast.makeText(context, "MediaProjection nahi mila.", android.widget.Toast.LENGTH_LONG).show()
-            return@rememberLauncherForActivityResult
-        }
-        val metrics = android.util.DisplayMetrics().also { dm ->
-            @Suppress("DEPRECATION")
-            (context.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealMetrics(dm)
-        }
-        // Screen share always runs on top of a live session: start the session first if the user jumped straight here.
-        if (!com.jarvis.assistant.SaifAutomation.isLiveRunning.value) {
-            com.jarvis.assistant.SaifAutomation.startLive(context, com.jarvis.assistant.SaifAutomation.LiveMode.SCREEN_SHARE, isLightMode)
-        }
-        val started = com.jarvis.assistant.SaifAutomation.startScreenShare(projection, metrics)
-        com.example.ui.components.SaifLiveSession.pendingScreenShare = false
-        android.widget.Toast.makeText(
-            context,
-            if (started) "SAIF AI ab aapki screen dekh kar madad karega." else "Screen share start nahi ho paya.",
-            android.widget.Toast.LENGTH_LONG
-        ).show()
-        // Screen capture is queued until the live socket opens. If it never does, say exactly why instead of
-        // leaving the owner with a silent "nothing happened".
-        if (started) {
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                val reason = com.jarvis.assistant.SaifAutomation.lastScreenShareError
-                if (reason.isNotBlank()) {
-                    android.widget.Toast.makeText(context, "Screen share: $reason", android.widget.Toast.LENGTH_LONG).show()
-                }
-            }, 9_000L)
+            android.widget.Toast.makeText(
+                context,
+                if (started) "Screen share shuru ho raha hai." else "Screen share start nahi ho paya.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            if (started) {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    val reason = automation.lastScreenShareError
+                    if (reason.isNotBlank()) {
+                        android.widget.Toast.makeText(context, "Screen share: $reason", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }, 9_000L)
+            }
         }
     }
     var activeVideoProjectData by remember { mutableStateOf<com.example.ui.components.VideoProjectData?>(null) }

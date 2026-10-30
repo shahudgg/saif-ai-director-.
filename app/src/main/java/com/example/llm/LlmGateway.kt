@@ -105,7 +105,7 @@ object LlmGateway {
             val callReq = currentRequest.copy(maxTokens = allocatedOutput)
 
             val result = LlmClient.streamDetailed(
-                providerName = profile.id,
+                providerName = if (profile.id == "Custom") provider else profile.id,
                 apiKey = cleanKey,
                 modelName = activeModel,
                 request = callReq,

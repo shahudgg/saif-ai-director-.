@@ -12,8 +12,11 @@ import java.util.Locale
 object TTSManager : TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var isReady = false
-    private var queuedText: String? = null
-    private var queuedContext: Context? = null
+    private data class PendingSpeech(
+        val text: String, val context: Context, val queueMode: Int,
+        val onStart: (() -> Unit)?, val onDone: (() -> Unit)?
+    )
+    private val queuedSpeech = mutableListOf<PendingSpeech>()
 
     private val _currentlySpeakingText = MutableStateFlow<String?>(null)
     val currentlySpeakingText: StateFlow<String?> = _currentlySpeakingText
@@ -25,7 +28,7 @@ object TTSManager : TextToSpeech.OnInitListener {
         return _currentlySpeakingText.value == text
     }
 
-    fun init(context: Context) {
+    @Synchronized fun init(context: Context) {
         if (tts == null) {
             tts = TextToSpeech(context.applicationContext, this)
         }
@@ -35,7 +38,7 @@ object TTSManager : TextToSpeech.OnInitListener {
     private var lastAppliedVoiceId: String = ""
     private var lastAppliedIsHindi: Boolean = false
 
-    override fun onInit(status: Int) {
+    @Synchronized override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             isReady = true
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
@@ -66,15 +69,16 @@ object TTSManager : TextToSpeech.OnInitListener {
                     }
                 }
             })
-            queuedText?.let { text ->
-                queuedContext?.let { ctx ->
-                    speak(text, ctx)
-                }
-                queuedText = null
-                queuedContext = null
-            }
+            val pending = queuedSpeech.toList()
+            queuedSpeech.clear()
+            pending.forEach { speakInternal(it.text, it.context, it.queueMode, it.onStart, it.onDone) }
         } else {
             Log.e("TTSManager", "Initialization failed")
+            val pending = queuedSpeech.toList()
+            queuedSpeech.clear()
+            _currentlySpeakingText.value = null
+            _isSpeaking.value = false
+            pending.forEach { it.onDone?.invoke() }
         }
     }
 
@@ -227,7 +231,7 @@ object TTSManager : TextToSpeech.OnInitListener {
         speakInternal(text, context, queueMode = TextToSpeech.QUEUE_ADD, onStart, onDone)
     }
 
-    private fun speakInternal(
+    @Synchronized private fun speakInternal(
         text: String,
         context: Context,
         queueMode: Int = TextToSpeech.QUEUE_FLUSH,
@@ -243,18 +247,16 @@ object TTSManager : TextToSpeech.OnInitListener {
 
         _currentlySpeakingText.value = text
 
-        val utteranceId = "LIVE_SPEECH_${System.currentTimeMillis()}_${cleanText.hashCode()}"
-        if (onStart != null || onDone != null) {
-            utteranceCallbacks[utteranceId] = Pair(onStart, onDone)
+        if (!isReady) {
+            if (queueMode == TextToSpeech.QUEUE_FLUSH) queuedSpeech.clear()
+            queuedSpeech.add(PendingSpeech(text, context.applicationContext, queueMode, onStart, onDone))
+            if (tts == null) init(context)
+            return
         }
 
-        if (!isReady) {
-            queuedText = cleanText
-            queuedContext = context
-            if (tts == null) {
-                init(context)
-            }
-            return
+        val utteranceId = "LIVE_SPEECH_${System.nanoTime()}_${cleanText.hashCode()}"
+        if (onStart != null || onDone != null) {
+            utteranceCallbacks[utteranceId] = Pair(onStart, onDone)
         }
 
         val prefs = context.getSharedPreferences("VoiceSettings", Context.MODE_PRIVATE)
@@ -269,10 +271,15 @@ object TTSManager : TextToSpeech.OnInitListener {
         applyProfile(profile, isHinglish = isHinglish, hasDevanagari = hasDevanagari, hasExcitement = hasExcitement)
 
         val params = android.os.Bundle().apply { putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId) }
-        tts?.speak(cleanText, queueMode, params, utteranceId)
+        if (tts?.speak(cleanText, queueMode, params, utteranceId) != TextToSpeech.SUCCESS) {
+            utteranceCallbacks.remove(utteranceId)?.second?.invoke()
+            _currentlySpeakingText.value = null
+            if (utteranceCallbacks.isEmpty()) _isSpeaking.value = false
+        }
     }
 
-    fun stop() {
+    @Synchronized fun stop() {
+        queuedSpeech.clear()
         _isSpeaking.value = false
         _currentlySpeakingText.value = null
         utteranceCallbacks.clear()

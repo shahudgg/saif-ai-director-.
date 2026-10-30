@@ -104,7 +104,9 @@ object LlmClient {
             .removeSurrounding("\"").removeSurrounding("'").removePrefix("Bearer ").removePrefix("bearer ").trim()
 
         val detected = ProviderProfile.detectProviderFromKey(cleanKey, providerName)
-        val profile = if (cleanKey.startsWith("AIza") || cleanKey.startsWith("AQ.") || cleanKey.startsWith("gsk_") ||
+        val profile = if (providerName.startsWith("https://") || providerName.startsWith("http://")) {
+            ProviderProfile.getById(providerName)
+        } else if (cleanKey.startsWith("AIza") || cleanKey.startsWith("AQ.") || cleanKey.startsWith("gsk_") ||
             cleanKey.startsWith("sk-or-") || cleanKey.startsWith("sk-ant-") || cleanKey.startsWith("xai-") ||
             cleanKey.startsWith("csk-") || cleanKey.startsWith("opencode") || cleanKey.startsWith("ashna") ||
             cleanKey.startsWith("atria") || cleanKey.startsWith("inception") || cleanKey.startsWith("fw_")) {
@@ -748,7 +750,20 @@ object LlmClient {
             }
             messagesArray.put(JSONObject().apply {
                 put("role", "user")
-                put("content", userContent)
+                if (request.imagesBase64.isNotEmpty() && profile.dialect.supportsVision) {
+                    val parts = JSONArray()
+                    for (image in request.imagesBase64) {
+                        parts.put(JSONObject().put("type", "image").put("source", JSONObject().apply {
+                            put("type", "base64")
+                            put("media_type", "image/jpeg")
+                            put("data", image.substringAfter(",", image))
+                        }))
+                    }
+                    parts.put(JSONObject().put("type", "text").put("text", userContent))
+                    put("content", parts)
+                } else {
+                    put("content", userContent)
+                }
             })
             put("messages", messagesArray)
         }

@@ -86,6 +86,7 @@ fun SaifLiveSettingsSection(glassBorderBrush: Brush) {
     var overlayOn by remember { mutableStateOf(prefs.isTaskOverlayEnabled) }
     var overlayAvatar by remember { mutableStateOf(prefs.taskOverlayAvatar) }
     var overlayMode by remember { mutableStateOf(prefs.taskOverlayMode) }
+    var nativeGemini by remember { mutableStateOf(com.jarvis.assistant.SaifAutomation.useGeminiNativeLive) }
     var voiceLock by remember { mutableStateOf(prefs.isOwnerVoiceEnabled) }
     var hasVoicePrint by remember { mutableStateOf(prefs.hasOwnerVoiceProfile()) }
 
@@ -107,6 +108,18 @@ fun SaifLiveSettingsSection(glassBorderBrush: Brush) {
                 }
             )
 
+            HorizontalDivider(color = SaifTheme.colors.cardBorder)
+
+            LiveSwitchRow(
+                title = "Gemini native live audio",
+                subtitle = "Optional fast path for Gemini only. Off uses your selected SAIF TTS voice for all providers.",
+                checked = nativeGemini,
+                onCheckedChange = { on ->
+                    nativeGemini = on
+                    com.jarvis.assistant.SaifAutomation.useGeminiNativeLive = on
+                    com.jarvis.assistant.SaifAutomation.onHostApiChanged()
+                }
+            )
             HorizontalDivider(color = SaifTheme.colors.cardBorder)
 
             // ------------------------------------------------------------------ conversation language

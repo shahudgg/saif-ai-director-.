@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, "arena/**" ]
     # The catalog sync commits telegram_catalog/*; that alone does not need a new APK.
     paths-ignore:
       - 'telegram_catalog/**'
