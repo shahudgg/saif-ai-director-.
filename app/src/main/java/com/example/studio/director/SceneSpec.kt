@@ -47,7 +47,8 @@ val SUPPORTED_ANIM_PROPS = setOf("x", "y", "w", "h", "alpha", "scale", "rotation
 val SUPPORTED_EASINGS = setOf("linear", "easeIn", "easeOut", "easeInOut", "overshoot", "expoOut", "backOut", "bounce", "spring", "cubicInOut")
 val SUPPORTED_TRANSITIONS = setOf(
     "none", "fade", "slideLeft", "slideUp", "zoom", "wipe", "dissolve",
-    "slideRight", "push", "whip", "glitch", "flash", "iris", "spin", "zoomBlur"
+    "slideRight", "push", "whip", "glitch", "flash", "iris", "spin", "zoomBlur",
+    "pageflip", "cubeSpin", "depthWipe", "glitchDissolve", "page-flip", "cube-spin", "depth-wipe", "glitch-dissolve"
 )
 
 data class Anim(

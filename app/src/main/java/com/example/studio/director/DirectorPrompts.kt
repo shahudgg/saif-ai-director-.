@@ -2,7 +2,7 @@ package com.example.studio.director
 
 import com.example.studio.composer.StyleDNA
 
-/** Different narrative shapes, picked per video from its seed, so two videos on one topic are told differently. */
+/** Narrative shape chosen deterministically from the creative brief's style seed. */
 object StoryStyles {
     val ALL = listOf(
         "COUNTDOWN: build the video as a countdown of the most important points; every point hits harder than the one before.",
@@ -20,7 +20,7 @@ object StoryStyles {
     fun forSeed(seed: String?): String = ALL[Math.floorMod(seed?.trim()?.toIntOrNull() ?: 0, ALL.size)]
 }
 
-/** A menu of motion-graphic layouts. The order is shuffled per video, so each video gets different scenes. */
+/** A deterministic menu of motion-graphic archetypes, each suggested in three distinct layout variants. */
 object SceneArchetypes {
     val ALL = listOf(
         "a giant animated number (text fx counter) inside a donut ring with a one-line label and two small supporting stat chips",
@@ -61,7 +61,12 @@ object SceneArchetypes {
     fun forScene(seed: String?, index: Int): String {
         val n = seed?.trim()?.toIntOrNull() ?: 0
         val order = ALL.indices.toMutableList().also { java.util.Collections.shuffle(it, java.util.Random(n.toLong() * 31L + 7L)) }
-        return ALL[order[Math.floorMod(index, order.size)]]
+        val layout = when (Math.floorMod(index / order.size + n, 3)) {
+            0 -> "centered hero, headline above, supporting detail below"
+            1 -> "hero left, text in a right-hand column"
+            else -> "hero right, text in a left-hand column"
+        }
+        return ALL[order[Math.floorMod(index, order.size)]] + " — layout: " + layout
     }
 }
 
@@ -109,7 +114,7 @@ object DirectorPrompts {
         appendLine("Open a new beat roughly every 3 seconds of speech (a new fact, example, question or contrast). Include one mini pattern-interrupt around the middle (a question or a surprising twist).")
         appendLine("Structure: hook -> why it matters -> the key idea explained simply -> a concrete example -> proof or twist -> payoff -> a closing line that asks the viewer to follow and to comment on a specific question about this topic.")
         if (b.scriptMode != ScriptMode.FULL_SCRIPT_PRESERVE) {
-            appendLine("Tell it in this shape (it overrides the default structure where they differ): ${StoryStyles.forSeed(b.answers["styleSeed"])}")
+            appendLine("Tell it in this shape (it overrides the default structure where they differ): ${StoryStyles.forSeed(StyleDNA.fromBrief(b).seed.toString())}")
             appendLine("Originality: write like a human creator with a point of view, not like an encyclopedia. No filler such as 'in today's world' or 'let's dive in'. Do not reuse stock phrases. Show the idea through a specific example, number or short story from the facts.")
             appendLine("Make the viewer picture it: prefer concrete nouns, comparisons the viewer already knows, and one vivid image per beat so each beat can be drawn as a graphic.")
         }
@@ -128,7 +133,7 @@ object DirectorPrompts {
         appendLine("Convert the approved narration into a scene manifest as ONE JSON object (no prose, no markdown).")
         appendLine("Project: aspect ${b.aspect ?: "9:16"}, fps $fps, target total ${totalMs} ms, style ${b.style ?: "explainer"}, motion level ${b.motionLevel ?: "balanced"}.")
         if (transcriptJson != null) appendLine("Scene boundaries MUST follow these transcript segments (ms): $transcriptJson")
-        appendLine("""Schema: {"title":str,"fps":int,"scenes":[{"id":"s1","startMs":int,"endMs":int,"narration":str,"visualObjective":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|none","transitionMs":int,"assets":[{"id":str,"kind":"image|video|overlay|audio","description":"precise searchable description","fallback":"procedural"}],"cues":[{"kind":"sfx|music","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.15,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
+        appendLine("""Schema: {"title":str,"fps":int,"scenes":[{"id":"s1","startMs":int,"endMs":int,"narration":str,"visualObjective":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|pageflip|cubeSpin|depthWipe|glitchDissolve|none","transitionMs":int,"assets":[{"id":str,"kind":"image|video|overlay|audio","description":"precise searchable description","fallback":"procedural"}],"cues":[{"kind":"sfx|music","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.15,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
         appendLine("Element types (normalized 0..1 coords): text{text,x,y,w,size,color} rect{x,y,w,h,color} circle{x,y,w,h,color} ring{x,y,w,color} line/arrow{x,y,x2,y2,color} bars{x,y,w,h,values,labels,color} linechart{x,y,w,h,values,color} nodes{x,y,w,h,values=[nodes per layer],color,color2} grid{x,y,w,h,count,color} particles{x,y,w,h,count,seed,color}.")
         appendLine("3D CANVAS ELEMENTS: depthStack{count,labels} parallax{count,labels} extrusion{text,extrusion} perspectiveQuad{text} perspectiveCard{text} cube{text,color,color2}. They are projected, shaded shapes. Every element can set depth -1..1 (positive is nearer); 3D shapes can set rotationX/rotationY in degrees, extrusion/specular/rimLight/shadow 0..1. Camera can set dollyFrom/dollyTo (-1..1), orbitFrom/orbitTo and tiltFrom/tiltTo (degrees, -75..75). Animate rotationX, rotationY and depth in anims. Use distinct depths to make camera motion produce genuine parallax; default 0 preserves flat scenes.")
         appendLine("Each element may have anims:[{prop:x|y|w|h|alpha|scale|rotation|rotationX|rotationY|depth|progress,from,to,startMs,endMs,easing:linear|easeIn|easeOut|easeInOut|overshoot}] with times relative to scene start.")
@@ -142,14 +147,14 @@ object DirectorPrompts {
     fun sceneBatch(b: DirectorBrief, batch: List<SceneOutline>, totalScenes: Int, fps: Int, problem: String): String = buildString {
         appendLine("Design the visuals for ${batch.size} scenes of a $totalScenes-scene video. Reply with ONE complete JSON object only (no prose, no markdown).")
         appendLine("Project: aspect ${b.aspect ?: "9:16"}, fps $fps, style ${b.style ?: "explainer"}, motion level ${b.motionLevel ?: "balanced"}.")
-        appendLine("""Schema: {"scenes":[{"id":"s1","visualObjective":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|none","transitionMs":int,"assets":[{"id":str,"kind":"image|video|overlay|audio","description":"precise searchable description","fallback":"procedural"}],"cues":[{"kind":"sfx|music","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.15,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
+        appendLine("""Schema: {"scenes":[{"id":"s1","visualObjective":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|pageflip|cubeSpin|depthWipe|glitchDissolve|none","transitionMs":int,"assets":[{"id":str,"kind":"image|video|overlay|audio","description":"precise searchable description","fallback":"procedural"}],"cues":[{"kind":"sfx|music","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.15,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
         appendLine("Return exactly ${batch.size} scenes, in this order, using exactly these ids. Do NOT return narration, startMs or endMs.")
         appendLine("Element types (normalized 0..1 coords): text{text,x,y,w,size,color} rect{x,y,w,h,color} circle{x,y,w,h,color} ring{x,y,w,color} line/arrow{x,y,x2,y2,color} bars{x,y,w,h,values,labels,color} linechart{x,y,w,h,values,color} nodes{x,y,w,h,values=[nodes per layer],color,color2} grid{x,y,w,h,count,color} particles{x,y,w,h,count,seed,color}.")
         appendLine("3D CANVAS ELEMENTS: depthStack{count,labels} parallax{count,labels} extrusion{text,extrusion} perspectiveQuad{text} perspectiveCard{text} cube{text,color,color2}. They are projected, shaded shapes. Every element can set depth -1..1 (positive is nearer); 3D shapes can set rotationX/rotationY in degrees, extrusion/specular/rimLight/shadow 0..1. Camera can set dollyFrom/dollyTo (-1..1), orbitFrom/orbitTo and tiltFrom/tiltTo (degrees, -75..75). Animate rotationX, rotationY and depth in anims. Use distinct depths to make camera motion produce genuine parallax; default 0 preserves flat scenes.")
         appendLine("Each element may have anims:[{prop:x|y|w|h|alpha|scale|rotation|rotationX|rotationY|depth|progress,from,to,startMs,endMs,easing:linear|easeIn|easeOut|easeInOut|overshoot}] with times relative to scene start and never later than the scene duration.")
         appendLine("Design each scene's graphics for what its narration explains (diagrams, charts, flows, labels). Do not reuse one layout. Use at most 14 elements per scene, colors as #RRGGBB, keep the JSON compact.")
         appendLine("DESIGN RULES (scenes that break them are rejected and redone): every scene must SHOW the idea of its narration with at least 4 visible elements (e.g. a labelled diagram, a chart with real values, a flow of 3-4 labelled steps, a comparison). Every rect that is not a thin bar must contain a text label whose centre lies inside it and whose text fits inside it (short labels, max 4 words). No empty blocks, no full-screen flat rectangles, never the same text twice. Keep all text inside x 0.08..0.92 and y 0.06..0.64. Add atmosphere with glow, particles, grid or ring elements and give every element an entrance animation (alpha/scale/progress). Neighbouring scenes must look different: change layout, shapes and colours.")
-        StyleDNA.fromAnswer(b.answers["styleSeed"])?.let { d ->
+        StyleDNA.fromBrief(b).let { d ->
             val pal = d.palettes
             appendLine("Colour mood for this video (use these, they are unique to it): " + pal.joinToString("; ") { "bg ${it.bgTop}->${it.bgBottom}, accents ${it.accent} and ${it.accent2}" } + ".")
         }
@@ -164,7 +169,7 @@ object DirectorPrompts {
     fun sceneBatchV2(b: DirectorBrief, batch: List<Pair<Int, SceneOutline>>, totalScenes: Int, fps: Int, problem: String, factsFor: (SceneOutline) -> List<String>): String = buildString {
         appendLine("You are an award-winning motion-graphics director. Design ${batch.size} scenes of a $totalScenes-scene explainer video. Reply with ONE complete JSON object only (no prose, no markdown).")
         appendLine("Project: aspect ${b.aspect ?: "9:16"}, fps $fps, style ${b.style ?: "explainer"}, motion level ${b.motionLevel ?: "balanced"}. Topic: ${b.prompt.take(140)}")
-        appendLine("""Schema: {"scenes":[{"id":"s1","visualObjective":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|push|whip|flash|iris|zoomBlur|glitch","transitionMs":int,"assets":[{"id":str,"kind":"image|video","description":"what a stock clip/picture for this beat must show","fallback":"procedural"}],"cues":[{"kind":"whoosh|pop|riser|hit|ding|tick|glitch","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.12,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
+        appendLine("""Schema: {"scenes":[{"id":"s1","visualObjective":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|push|whip|flash|iris|zoomBlur|glitch|pageflip|cubeSpin|depthWipe|glitchDissolve","transitionMs":int,"assets":[{"id":str,"kind":"image|video","description":"what a stock clip/picture for this beat must show","fallback":"procedural"}],"cues":[{"kind":"whoosh|pop|riser|hit|ding|tick|glitch","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.12,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
         appendLine("Return exactly ${batch.size} scenes, in this order, with exactly these ids. Do NOT return narration, startMs or endMs.")
         appendLine("CORE ELEMENTS (normalized 0..1 coords, x/y = centre): text{text,x,y,w,size,color,fx} rect{x,y,w,h,color,radius} circle ring donut{values:[percent]} line arrow bars{values,labels} linechart nodes grid particles glow burst sweep flash glitch grain vignette icon{text=chart|coin|shield|lock|bulb|clock|heart|rocket|check|warning|globe|target|brain|phone|star}.")
         appendLine("ADVANCED ELEMENTS — these exist so every scene can be built differently. Pick the one that really matches the idea:")
@@ -177,10 +182,10 @@ object DirectorPrompts {
         appendLine("ORIGINALITY IS NOT OPTIONAL. Do not reuse a layout. Every scene must be designed from scratch for its own sentence, using a DIFFERENT primitive family from the scenes before it (if the previous scene was bars+cards, this one must be e.g. a radar, a gauge, a table, an orbit, a heat map, a ribbon, a staircase...). A scene that repeats an earlier scene's primitive recipe, layout or palette is REJECTED and you will be asked to redesign it. Prefer one strong custom composition per scene over several generic boxes.")
         appendLine("Use the suggested layout as a starting point; change it if the narration needs something else, but never reuse the previous scene's layout. Write on-screen text in ${b.onScreenLanguage ?: b.narrationLanguage ?: "the narration language"}; keep labels short.")
         appendLine("Optionally add one entry in assets (kind video or image) ONLY when real footage or a picture of the subject would make the beat stronger than a graphic (people, places, products, reactions); describe exactly what it must show. Add 1-3 cues where a sound belongs (whoosh at a transition, hit when a number lands, pop for list items).")
-        StyleDNA.fromAnswer(b.answers["styleSeed"])?.let { d ->
+        StyleDNA.fromBrief(b).let { d ->
             appendLine("Colour mood for this video (unique to it): " + d.palettes.joinToString("; ") { "bg ${it.bgTop}->${it.bgBottom}, accents ${it.accent} and ${it.accent2}" } + ".")
         }
-        val seed = b.answers["styleSeed"]
+        val seed = StyleDNA.fromBrief(b).seed.toString()
         batch.forEach { (idx, o) ->
             appendLine("Scene ${o.id} (duration ${o.endMs - o.startMs} ms) narration: ${o.narration}")
             appendLine("  suggested layout: ${SceneArchetypes.forScene(seed, idx)}")

@@ -1,16 +1,16 @@
 package com.example.studio.composer
 
 /**
- * One random "look" per generated video: which palettes it cycles through, how the backdrop is built and which finishing
- * ornaments are used. Two videos made from the same topic therefore do not look alike, but every scene inside one video
- * still belongs together. The seed is stored with the project so regenerated scenes keep the same look.
+ * Per-video visual identity: palettes, backdrop and ornaments are derived from a stable normalized creative brief.
+ * All scenes in one video belong together; a changed brief deterministically creates a different look.
  */
 data class StyleDNA(
     val seed: Int,
     val palettes: List<Palette>,
     val variantShift: Int,
     val backdrop: Int,          // 0 particles+glow, 1 grid, 2 rings, 3 aurora, 4 scan sweep
-    val ornament: Int           // 0 progress bar + tag pill, 1 corner brackets + tag pill, 2 progress bar only, 3 brackets + progress bar
+    val ornament: Int,          // 0 progress bar + tag pill, 1 corner brackets + tag pill, 2 progress bar only, 3 brackets + progress bar
+    val signature: String = "" // stable identity of normalized creative brief
 ) {
     /** Palette for beat [index]; alert/excited beats pick the warm entries so emotion still reads. */
     fun palette(index: Int, emotion: String): Palette {
@@ -51,6 +51,21 @@ data class StyleDNA(
         }
 
         fun fromAnswer(value: String?): StyleDNA? = value?.trim()?.toIntOrNull()?.let { from(it) }
+
+        private fun normalize(value: String?): String = java.text.Normalizer.normalize(value.orEmpty(), java.text.Normalizer.Form.NFKC)
+            .trim().lowercase(java.util.Locale.ROOT).replace(Regex("\\s+"), " ")
+
+        /** Derive v2 identity from user-facing creative inputs, not generated styleSeed or timestamps. */
+        fun fromBrief(brief: com.example.studio.director.DirectorBrief): StyleDNA {
+            val fields = listOf(brief.prompt, brief.userScript, brief.style, brief.audience, brief.aspect,
+                brief.motionLevel, brief.pace, brief.narrationLanguage, brief.onScreenLanguage, brief.assetPolicy, brief.avoid)
+            val canonical = fields.map(::normalize).joinToString("") { "${it.length}:$it" }
+            val hash = java.security.MessageDigest.getInstance("SHA-256").digest(("saif-style-v2\u001f" + canonical).toByteArray(Charsets.UTF_8))
+            val seed = ((hash[0].toInt() and 255) shl 24) or ((hash[1].toInt() and 255) shl 16) or
+                ((hash[2].toInt() and 255) shl 8) or (hash[3].toInt() and 255)
+            val signature = "v2-" + hash.joinToString("") { "%02x".format(java.util.Locale.ROOT, it.toInt() and 255) }
+            return from(seed).copy(signature = signature)
+        }
 
         /** A fresh random seed, stored as text in the brief's answers. */
         fun newSeed(): String = (java.util.Random().nextInt(Int.MAX_VALUE)).toString()

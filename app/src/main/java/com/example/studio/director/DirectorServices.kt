@@ -6,10 +6,10 @@ import com.example.studio.composer.CapabilityProbe
 import com.example.studio.composer.CapabilityProfile
 import com.example.studio.composer.LayoutEngine
 import com.example.studio.composer.LocalBeatAnalyzer
-import com.example.studio.composer.SceneComposer
 import com.example.studio.composer.Strategy
 import com.example.studio.composer.SceneLint
 import com.example.studio.composer.SceneUniqueness
+import com.example.studio.composer.SceneVarietyComposer
 import com.example.studio.composer.StyleDNA
 import android.net.Uri
 import com.example.llm.LlmRole
@@ -145,7 +145,7 @@ class DirectorServices(private val context: Context) {
     private val sceneCache = HashMap<String, Scene>()
 
     private fun cacheKey(b: DirectorBrief, o: SceneOutline) =
-        "${b.workflow.name}|${b.aspect}|${b.style}|${b.motionLevel}|${o.id}|${o.startMs}|${o.endMs}|${o.narration.hashCode()}"
+        "${b.workflow.name}|${StyleDNA.fromBrief(b).signature}|${o.id}|${o.startMs}|${o.endMs}|${o.narration.hashCode()}"
 
     /**
      * Scene planning in small batches. Narration and timing come from the approved script; the model only designs visuals.
@@ -197,9 +197,21 @@ class DirectorServices(private val context: Context) {
                 if (designByModel && failedBatches >= 2 && modelScenes.isEmpty()) break          // this model cannot design scenes: stop wasting calls
                 if (designByModel) {
                     val cached = outs.map { sceneCache[cacheKey(b, it)] }
-                    if (cached.all { it != null }) {
+                    val cacheGraphs = ArrayList<SceneGraph>(acceptedGraphs)
+                    var cacheValid = true
+                    for (sc in cached) {
+                        val gr = sc?.graph
+                        if (sc == null || gr == null) { cacheValid = false; break }
+                        val fixed = LayoutEngine.repair(SceneLint.adoptCards(gr, aw, ah), aw, ah, sc.durationMs).graph
+                        if (LayoutEngine.issues(fixed, aw, ah, sc.durationMs).isNotEmpty() ||
+                            SceneLint.problems(fixed, aw, ah).isNotEmpty() || SceneUniqueness.repeatsOf(fixed, cacheGraphs).isNotEmpty()) {
+                            cacheValid = false; break
+                        }
+                        cacheGraphs.add(fixed)
+                    }
+                    if (cacheValid) {
                         batch.forEachIndexed { k, iv -> modelScenes[iv.index] = cached[k]!! }
-                        cached.mapNotNull { it?.graph }.forEach { acceptedGraphs.add(it) }
+                        acceptedGraphs.clear(); acceptedGraphs.addAll(cacheGraphs)
                         continue
                     }
                     var accepted: List<Scene>? = null
@@ -232,9 +244,10 @@ class DirectorServices(private val context: Context) {
                         val running = ArrayList<SceneGraph>(acceptedGraphs)
                         for (mi in merged.indices) {
                             val gr = merged[mi].graph ?: continue
-                            val why = SceneUniqueness.reason(gr, running, batch[mi].index)
+                            val fixed = LayoutEngine.repair(SceneLint.adoptCards(gr, aw, ah), aw, ah, merged[mi].durationMs).graph
+                            val why = SceneUniqueness.reason(fixed, running, batch[mi].index)
                             if (why != null) { uniqBad = why; break }
-                            running.add(gr)
+                            running.add(fixed)
                         }
                         if (uniqBad != null) { problem = "Originality problem: $uniqBad"; continue }
                         accepted = merged; break
@@ -242,7 +255,9 @@ class DirectorServices(private val context: Context) {
                     if (accepted == null) failedBatches++
                     accepted?.let { ok ->
                         batch.forEachIndexed { k, iv -> modelScenes[iv.index] = ok[k]; sceneCache[cacheKey(b, outs[k])] = ok[k] }
-                        ok.mapNotNull { it.graph }.forEach { acceptedGraphs.add(it) }
+                        ok.forEach { sc -> sc.graph?.let { gr ->
+                            acceptedGraphs.add(LayoutEngine.repair(SceneLint.adoptCards(gr, aw, ah), aw, ah, sc.durationMs).graph)
+                        } }
                     }
                 } else {
                     askDirectives(b, outs, total, strategy!!).fold(
@@ -258,10 +273,10 @@ class DirectorServices(private val context: Context) {
 
         var localCount = 0
         var prevTransition: String? = null
-        var prevGraph: SceneGraph? = null
-        // Graphs actually built for this video, in order: the uniqueness gate compares every new scene against all of them.
-        val builtGraphs = ArrayList<SceneGraph>(acceptedGraphs)
-        val dna = StyleDNA.fromAnswer(b.answers["styleSeed"])
+        // Start empty: acceptedGraphs includes the current model scene, so seeding this list with it
+        // makes every model candidate collide with itself. Only actually built earlier scenes belong here.
+        val builtGraphs = ArrayList<SceneGraph>()
+        val dna = StyleDNA.fromBrief(b)
         val scenes = ArrayList<Scene>()
         outlines.forEachIndexed { i, o ->
             val beat = beats[i]
@@ -275,19 +290,11 @@ class DirectorServices(private val context: Context) {
                 if (ok) fixed else null
             }
             if (graph == null) {
-                // The model's design was a repeat or failed the layout: the local composer designs a DIFFERENT one,
-                // forced away from every scene already built for this video.
-                var local = SceneComposer.compose(beat, b.aspect ?: "9:16", accentOverride = BrandKit.accent(context), dna = dna)
-                var guard = 0
-                while (SceneUniqueness.repeatsOf(local, builtGraphs).isNotEmpty() && guard < 4) {
-                    local = SceneComposer.compose(beat, b.aspect ?: "9:16", accentOverride = BrandKit.accent(context),
-                        dna = com.example.studio.composer.StyleDNA.fromAnswer((b.answers["styleSeed"] ?: "0").let { sd -> (sd.toIntOrNull()?.plus(guard * 977 + i * 31)?.toString()) ?: sd }))
-                    guard++
-                }
-                graph = local
+                // Deterministic exhaustive replan; never accept the last candidate merely because retries ran out.
+                graph = SceneVarietyComposer.unique(beat, b.aspect ?: "9:16", dna, BrandKit.accent(context), builtGraphs)
+                    ?: return Result.failure(IllegalStateException("Could not find a unique valid design for scene ${i + 1}; no repeated scene was accepted."))
                 localCount++
             }
-            prevGraph = graph
             builtGraphs.add(graph)
             scenes += Scene(
                 id = o.id, startMs = o.startMs, endMs = o.endMs, narration = o.narration,
@@ -301,11 +308,10 @@ class DirectorServices(private val context: Context) {
         note.append(when (strategy) { null -> " — no AI model configured, so visuals were designed locally from your script."; else -> " — model strategy: ${strategy.name}." })
         if (modelDown != null) note.append(" The model became unavailable, so the remaining beats were designed locally.")
         else if (strategy != null && localCount > 0 && designByModel) note.append(" $localCount beat(s) were redesigned by the local composer because the model's design repeated an earlier scene or failed validation.")
-        // Honest report when two scenes still look alike after every gate (the owner asked for this specifically).
         val collisions = SceneUniqueness.collisions(scenes.map { it.graph })
-        if (collisions.isNotEmpty()) note.append(" ${collisions.size} pair(s) of scenes still look similar: " +
-            collisions.take(3).joinToString(", ") { "scene ${it.first + 1} and ${it.second + 1}" } + ".")
-        else note.append(" Every scene has its own design — no two scenes share a layout.")
+        if (collisions.isNotEmpty()) return Result.failure(IllegalStateException("Scene uniqueness gate failed: " +
+            collisions.take(3).joinToString(", ") { "scene ${it.first + 1} and ${it.second + 1}" }))
+        note.append(" Every scene passed the uniqueness and layout gates.")
         lastPlanNote = note.toString()
 
         var m = SceneManifest(fps = fps, title = b.prompt.lineSequence().firstOrNull().orEmpty().take(60), scenes = scenes)

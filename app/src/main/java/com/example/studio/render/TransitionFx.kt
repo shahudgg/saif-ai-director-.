@@ -12,7 +12,7 @@ import kotlin.math.min
  * one, so there is never a half-transparent "ghost" of two scenes. [p] is raw 0..1 progress of the transition.
  */
 object TransitionFx {
-    val GEOMETRIC = setOf("slideLeft", "slideRight", "slideUp", "push", "whip", "glitch", "flash", "iris", "spin", "zoomBlur", "zoom", "wipe")
+    val GEOMETRIC = setOf("slideLeft", "slideRight", "slideUp", "push", "whip", "glitch", "flash", "iris", "spin", "zoomBlur", "zoom", "wipe", "pageflip", "cubeSpin", "depthWipe", "glitchDissolve", "page-flip", "cube-spin", "depth-wipe", "glitch-dissolve")
 
     private fun easeOut(p: Float) = 1f - Math.pow((1f - p).toDouble(), 3.0).toFloat()
     private fun expoOut(p: Float) = if (p >= 1f) 1f else 1f - Math.pow(2.0, -10.0 * p).toFloat()
@@ -21,9 +21,43 @@ object TransitionFx {
     fun isGeometric(type: String?) = type != null && type in GEOMETRIC
 
     /** Applies the entry transform/clip to [canvas]. Call inside save()/restore(). Returns the number of extra ghost copies to draw (zoomBlur). */
-    fun begin(canvas: Canvas, w: Float, h: Float, type: String, p: Float) {
+    fun begin(canvas: Canvas, w: Float, h: Float, type: String, p: Float, seed: Int = 0x51A7) {
         val e = easeOut(p.coerceIn(0f, 1f))
         when (type) {
+            "pageflip", "page-flip", "cubeSpin", "cube-spin" -> {
+                if (p <= 0.0001f) canvas.clipRect(0f, 0f, 0f, 0f)
+                else {
+                    val unit = if (type == "pageflip" || type == "page-flip") TransitionGeometry.pageFlip(p) else TransitionGeometry.cubeSpin(p)
+                    val dst = FloatArray(8) { i -> unit[i] * if (i % 2 == 0) w else h }
+                    val src = floatArrayOf(0f, 0f, w, 0f, w, h, 0f, h)
+                    val matrix = android.graphics.Matrix()
+                    if (matrix.setPolyToPoly(src, 0, dst, 0, 4)) canvas.concat(matrix) else canvas.clipRect(0f, 0f, 0f, 0f)
+                }
+            }
+            "depthWipe", "depth-wipe" -> {
+                val points = TransitionGeometry.depthWipe(p)
+                val path = Path().apply {
+                    moveTo(points[0] * w, points[1] * h)
+                    for (i in 1..3) lineTo(points[i * 2] * w, points[i * 2 + 1] * h)
+                    close()
+                }
+                canvas.clipPath(path)
+                val scale = .88f + .12f * e
+                canvas.scale(scale, scale, w * .5f, h * .5f)
+            }
+            "glitchDissolve", "glitch-dissolve" -> {
+                val strips = 28
+                val path = Path()
+                for (i in 0 until strips) {
+                    val progress = TransitionGeometry.glitchStrip(p, seed, i)
+                    val y0 = h * i / strips; val y1 = h * (i + 1) / strips + 1f
+                    if (progress > 0f) {
+                        if (i % 2 == 0) path.addRect(0f, y0, w * progress, y1, Path.Direction.CW)
+                        else path.addRect(w * (1f - progress), y0, w, y1, Path.Direction.CW)
+                    }
+                }
+                canvas.clipPath(path)
+            }
             "slideLeft" -> canvas.translate((1f - e) * w, 0f)
             "slideRight" -> canvas.translate(-(1f - e) * w, 0f)
             "slideUp" -> canvas.translate(0f, (1f - e) * h)

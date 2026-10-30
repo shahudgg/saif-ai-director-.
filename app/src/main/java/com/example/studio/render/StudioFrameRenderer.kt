@@ -67,7 +67,7 @@ interface FrameMediaProvider {
                         val active = tr != null && TransitionFx.isGeometric(tr.type) && tr.durationUs > 0 && layer.localTimeUs < tr.durationUs
                         val prog = if (active) layer.localTimeUs.toFloat() / tr!!.durationUs else 1f
                         canvas.save()
-                        if (active) TransitionFx.begin(canvas, width.toFloat(), height.toFloat(), tr!!.type, prog)
+                        if (active) TransitionFx.begin(canvas, width.toFloat(), height.toFloat(), tr!!.type, prog, graph.elements.firstOrNull()?.seed ?: item.id.hashCode())
                         SceneRenderer.draw(canvas, width, height, graph, layer.localTimeUs / 1000L, item.durationUs / 1000L, layer.opacity)
                         canvas.restore()
                         if (active) TransitionFx.overlay(canvas, width.toFloat(), height.toFloat(), tr!!.type, prog)
