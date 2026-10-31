@@ -9,21 +9,21 @@ import java.io.File
 /** Picks a transition per beat (never the same twice in a row) and plans a few well-placed sound cues. */
 object TransitionPlanner {
     private val pools = mapOf(
-        Intent.HOOK to listOf("flash", "zoomBlur"),
-        Intent.BIG_STAT to listOf("zoomBlur", "whip", "flash"),
-        Intent.LIST to listOf("slideLeft", "push", "slideUp"),
-        Intent.COMPARISON to listOf("whip", "slideLeft", "glitch"),
-        Intent.PROCESS_STEPS to listOf("slideLeft", "push", "slideUp"),
+        Intent.HOOK to listOf("flash", "zoomBlur", "pageflip"),
+        Intent.BIG_STAT to listOf("zoomBlur", "depthWipe", "flash"),
+        Intent.LIST to listOf("slideLeft", "pageflip", "slideUp"),
+        Intent.COMPARISON to listOf("cubeSpin", "slideLeft", "glitchDissolve"),
+        Intent.PROCESS_STEPS to listOf("slideLeft", "depthWipe", "pageflip"),
         Intent.TIMELINE to listOf("slideLeft", "wipe", "push"),
         Intent.QUOTE to listOf("fade", "iris", "dissolve"),
         Intent.CHART_BAR to listOf("slideUp", "wipe", "zoomBlur"),
         Intent.CHART_LINE to listOf("wipe", "slideUp", "push"),
         Intent.NETWORK_DIAGRAM to listOf("zoomBlur", "iris", "glitch"),
         Intent.MAP_LIKE_ZOOM to listOf("iris", "zoomBlur", "spin"),
-        Intent.MYTH_VS_FACT to listOf("glitch", "whip", "flash"),
+        Intent.MYTH_VS_FACT to listOf("glitchDissolve", "whip", "flash"),
         Intent.QUESTION to listOf("iris", "zoomBlur", "slideUp"),
         Intent.CTA to listOf("flash", "zoomBlur", "slideUp"),
-        Intent.STATEMENT to listOf("push", "whip", "slideLeft", "spin")
+        Intent.STATEMENT to listOf("push", "cubeSpin", "depthWipe", "pageflip", "glitchDissolve")
     )
 
     fun pick(beat: Beat, previous: String?): String {
@@ -41,7 +41,7 @@ object SfxPlanner {
         val d = beat.durationMs
         val cues = ArrayList<AudioCue>()
         if (transition != "none" && transition != "fade" && transition != "dissolve")
-            cues += AudioCue(if (transition == "glitch") "glitch" else "whoosh", "$transition transition", 0L, if (transition == "glitch") 280L else 450L)
+            cues += AudioCue(if (transition.startsWith("glitch")) "glitch" else "whoosh", "$transition transition", 0L, if (transition.startsWith("glitch")) 280L else 450L)
         when (beat.intent) {
             Intent.HOOK -> cues += AudioCue("hit", "hook impact", 60L, 600L)
             Intent.BIG_STAT -> { cues += AudioCue("riser", "build-up to number", 0L, 800L); cues += AudioCue("hit", "number lands", 780L.coerceAtMost(d - 300), 600L) }

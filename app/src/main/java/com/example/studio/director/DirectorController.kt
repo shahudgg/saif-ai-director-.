@@ -2,7 +2,10 @@ package com.example.studio.director
 
 import android.content.Context
 import com.example.studio.composer.LocalBeatAnalyzer
-import com.example.studio.composer.SceneComposer
+import com.example.studio.composer.Beat
+import com.example.studio.composer.SceneVarietyComposer
+import com.example.studio.composer.SceneUniqueness
+import com.example.studio.composer.StyleDNA
 import android.net.Uri
 import com.example.studio.model.StudioProject
 import kotlinx.coroutines.CancellationException
@@ -315,10 +318,11 @@ class DirectorController(
         } }
     }
 
-    /** One random look and story shape per video: a second video on the same topic gets a different palette, layouts and narrative. */
+    /** StyleDNA v2 is derived from the normalized creative brief, not wall time or a random seed. */
     private fun ensureSeed() {
-        if (_ui.value.brief.answers["styleSeed"].isNullOrBlank()) {
-            update { copy(brief = brief.copy(answers = brief.answers + ("styleSeed" to com.example.studio.composer.StyleDNA.newSeed()))) }
+        val dna = com.example.studio.composer.StyleDNA.fromBrief(_ui.value.brief)
+        if (_ui.value.brief.answers["styleSignature"] != dna.signature || _ui.value.brief.answers["styleSeed"] != dna.seed.toString()) {
+            update { copy(brief = brief.copy(answers = brief.answers + mapOf("styleSeed" to dna.seed.toString(), "styleSignature" to dna.signature))) }
         }
     }
 
@@ -370,7 +374,7 @@ class DirectorController(
         transcript = tr; gate()
         val total = AudioDurations.durationMs(appContext, uri).takeIf { it > 0 } ?: tr.segments.maxOf { it.endMs }
         say("Transcribed ${tr.segments.size} segments (${tr.provider}). Total ${total / 1000}s.")
-        if (_ui.value.brief.answers["styleSeed"].isNullOrBlank()) update { copy(brief = brief.copy(answers = brief.answers + ("styleSeed" to com.example.studio.composer.StyleDNA.newSeed()))) }
+        ensureSeed()
         val b2 = _ui.value.brief
         status(DirectorStage.PLANNING_SCENES, "Planning scenes from your narration")
         var m = services.planManifest(b2, tr.fullText, tr, total, onProgress = { i, n -> status(DirectorStage.PLANNING_SCENES, "Planning scenes from your narration", i.toFloat() / n, "Batch $i of $n") }, researchDigest = null).getOrElse { fail("Scene planning failed: ${it.message}"); return }
@@ -531,6 +535,13 @@ class DirectorController(
         update { copy(manifest = nm) }
     }
 
+    /** Replan an edited scene against every current scene, including the old version being replaced. */
+    private fun uniqueRedesign(beat: Beat, scenes: List<Scene>, variant: Int, accent: String?): SceneGraph? {
+        val base = StyleDNA.fromBrief(_ui.value.brief)
+        val dna = base.copy(variantShift = (base.variantShift + variant).mod(3))
+        return SceneVarietyComposer.unique(beat, aspectOf(), dna, accent, scenes.mapNotNull { it.graph })
+    }
+
     /** Replaces one scene's layout with the next local design variant. Narration, timing and all other scenes stay untouched. */
     fun regenerateVariant(index: Int) {
         val m = _ui.value.manifest ?: return
@@ -542,7 +553,9 @@ class DirectorController(
             val v = (variantOffsets[target.id] ?: 0) + 1; variantOffsets[target.id] = v
             val base = LocalBeatAnalyzer.analyze(target.narration, index, m.scenes.size, target.durationMs)
             val beat = com.example.studio.composer.Intent.parse(target.visualObjective.substringBefore(':'))?.let { base.copy(intent = it) } ?: base
-            val ns = target.copy(graph = SceneComposer.compose(beat, aspectOf(), variant = index + v, accentOverride = BrandKit.accent(appContext), dna = com.example.studio.composer.StyleDNA.fromAnswer(_ui.value.brief.answers["styleSeed"])), cues = SfxPlanner.cuesFor(beat, target.transitionIn))
+            val graph = uniqueRedesign(beat, m.scenes, v, BrandKit.accent(appContext))
+                ?: run { fail("No unique layout remains for scene ${index + 1}; nothing was changed."); return@guarded }
+            val ns = target.copy(graph = graph, cues = SfxPlanner.cuesFor(beat, target.transitionIn))
             reassembleOne(m, ns, "Scene ${index + 1} now uses a different layout.")
         } }
     }
@@ -580,7 +593,9 @@ class DirectorController(
             val retimed = SceneTiming.retimeGrouped(renamed, clips, padMs = 170L)
             val beat = LocalBeatAnalyzer.analyze(hook, 0, m.scenes.size, retimed.scenes.first().durationMs).copy(intent = com.example.studio.composer.Intent.HOOK)
             val v = (variantOffsets[first.id] ?: 0) + 1; variantOffsets[first.id] = v
-            val ns = retimed.scenes.first().copy(graph = SceneComposer.compose(beat, aspectOf(), variant = v, accentOverride = BrandKit.accent(appContext), dna = com.example.studio.composer.StyleDNA.fromAnswer(_ui.value.brief.answers["styleSeed"])), cues = SfxPlanner.cuesFor(beat, "none"))
+            val graph = uniqueRedesign(beat, m.scenes, v, BrandKit.accent(appContext))
+                ?: run { fail("No unique layout remains for the hook; nothing was changed."); return@guarded }
+            val ns = retimed.scenes.first().copy(graph = graph, cues = SfxPlanner.cuesFor(beat, "none"))
             val nm = retimed.copy(scenes = listOf(ns) + retimed.scenes.drop(1))
             narrationClips = clips
             val replaced = TimelineAssembler.clearAi(pendingProject ?: getProject(), setOf(first.id))
@@ -595,33 +610,15 @@ class DirectorController(
         } }
     }
 
-    /** Scene-level revision: only the named scene is regenerated; durations after it are recalculated. */
+    /** Route chat revisions through the same validated uniqueness gate as scene cards. */
     private fun reviseScene(instruction: String) {
         val m = _ui.value.manifest ?: return
         val num = Regex("(?i)scene\\s*(\\d+)").find(instruction)?.groupValues?.get(1)?.toIntOrNull()
         if (num == null || m.scenes.getOrNull(num - 1) == null) {
-            say("Tell me which scene to change, for example “Scene 2: make it a bar chart” (tap a scene in the plan to select it). The plan has ${m.scenes.size} scenes.")
+            say("Tell me which scene to change, for example “Scene 2: make it a bar chart”. The plan has ${m.scenes.size} scenes.")
             return
         }
-        if (m.scenes[num - 1].locked) { say("Scene $num is locked. Unlock it first.", error = true); return }
-        job = scope.launch { guarded {
-            status(DirectorStage.GENERATING_ANIMATIONS, "Revising scene")
-            val target = Regex("(?i)scene\\s*(\\d+)").find(instruction)?.groupValues?.get(1)?.toIntOrNull()?.let { m.scenes.getOrNull(it - 1) } ?: m.scenes.firstOrNull() ?: return@guarded
-            val prompt = "Rewrite ONLY the 'graph' of this scene per the instruction, keeping narration and timing. Reply with ONE JSON object {\"graph\":{...}} using the same primitives.\nInstruction: $instruction\nScene narration: ${target.narration}\nCurrent graph: ${target.graph?.let { SceneJson.graphToJson(it) } ?: "none"}"
-            val raw = services.revisionCall(prompt).getOrElse { fail("Revision failed: ${it.message}"); return@guarded }
-            val g = runCatching { SceneJson.parseGraph(JSONObject(SceneJson.extractJson(raw)).getJSONObject("graph")) }.getOrNull()
-            val issues = g?.let { SceneValidator.fatal(SceneValidator.validate(m.copy(scenes = listOf(target.copy(graph = it))))) }
-            if (g == null || !issues.isNullOrEmpty()) { fail("The model returned an invalid scene (${issues?.firstOrNull()?.message ?: "not JSON"}). Nothing was changed."); return@guarded }
-            val nm = m.copy(scenes = m.scenes.map { if (it.id == target.id) it.copy(graph = g) else it })
-            val base = pendingProject ?: getProject()
-            val replaced = TimelineAssembler.clearAi(base, setOf(target.id))
-            val one = nm.copy(scenes = listOf(nm.scenes.first { it.id == target.id }))
-            val (p, probs) = TimelineAssembler.assemble(replaced, one, narrationClips.filter { it.sceneId == target.id }, assets.filter { it.sceneId == target.id }, replaceExisting = false,
-                sfx = SfxFiles.render(appContext, one, library = { kind -> sfxLibrary(kind) }), captionStyle = BrandKit.captionStyle(appContext))
-            pendingProject = p
-            update { copy(manifest = nm, working = false, readyToApply = true, problems = probs, status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "Scene ${target.id} revised")) }
-            say("Revised ${target.id} only. Tap “Add to timeline” to apply.")
-        } }
+        reviseScenes(listOf(num - 1), instruction)
     }
 
     // ---------------- multi-scene actions used by the scene cards ----------------
@@ -658,16 +655,29 @@ class DirectorController(
                 val num = m0.scenes.indexOfFirst { it.id == target.id } + 1
                 status(DirectorStage.GENERATING_ANIMATIONS, "Revising scene $num", k.toFloat() / targets.size, "${k + 1}/${targets.size}")
                 val prompt = "Rewrite ONLY the 'graph' of this scene per the instruction, keeping narration and timing. Reply with ONE JSON object {\"graph\":{...}} using the same primitives. Every rectangle must hold a short label inside it; no empty blocks.\nInstruction: $instruction\nScene narration: ${target.narration}\nCurrent graph: ${target.graph?.let { SceneJson.graphToJson(it) } ?: "none"}"
-                val raw = services.revisionCall(prompt).getOrNull()
-                val g = raw?.let { r -> runCatching { SceneJson.parseGraph(JSONObject(SceneJson.extractJson(r)).getJSONObject("graph")) }.getOrNull() }
-                val fixed = g?.let { com.example.studio.composer.LayoutEngine.repair(com.example.studio.composer.SceneLint.adoptCards(it, aw, ah), aw, ah, target.durationMs).graph }
-                val fatal = fixed?.let { SceneValidator.fatal(SceneValidator.validate(m.copy(scenes = listOf(target.copy(graph = it))))) }
-                val lint = fixed?.let { com.example.studio.composer.SceneLint.problems(it, aw, ah) }
-                if (fixed == null || !fatal.isNullOrEmpty() || !lint.isNullOrEmpty()) { failed += "scene $num"; return@forEachIndexed }
-                done += target.copy(graph = fixed)
+                var feedback = ""
+                var chosen: SceneGraph? = null
+                for (attempt in 1..3) {
+                    val raw = services.revisionCall(prompt + feedback).getOrNull() ?: break
+                    val g = runCatching { SceneJson.parseGraph(JSONObject(SceneJson.extractJson(raw)).getJSONObject("graph")) }.getOrNull()
+                    val fixed = g?.let { com.example.studio.composer.LayoutEngine.repair(com.example.studio.composer.SceneLint.adoptCards(it, aw, ah), aw, ah, target.durationMs).graph }
+                    val fatal = fixed?.let { SceneValidator.fatal(SceneValidator.validate(m.copy(scenes = listOf(target.copy(graph = it))))) }
+                    val lint = fixed?.let { com.example.studio.composer.SceneLint.problems(it, aw, ah) }
+                    val layout = fixed?.let { com.example.studio.composer.LayoutEngine.issues(it, aw, ah, target.durationMs) }
+                    val others = m.scenes.filter { it.id != target.id }.mapNotNull { it.graph }
+                    val collision = fixed?.let { SceneUniqueness.reason(it, others, num - 1) }
+                    if (fixed != null && fatal.isNullOrEmpty() && lint.isNullOrEmpty() && layout.isNullOrEmpty() && collision == null) {
+                        chosen = fixed; break
+                    }
+                    feedback = "\nYour previous design was rejected: " + (collision ?: fatal?.firstOrNull()?.message ?: lint?.firstOrNull() ?: layout?.firstOrNull() ?: "invalid JSON") + ". Replan a unique, valid layout."
+                }
+                if (chosen == null) { failed += "scene $num"; return@forEachIndexed }
+                val revised = target.copy(graph = chosen)
+                done += revised
+                m = m.copy(scenes = m.scenes.map { if (it.id == target.id) revised else it })
             }
             if (done.isEmpty()) { fail("The model did not return a usable design for ${failed.joinToString()}. Nothing was changed."); return@guarded }
-            val (nm, probs) = reassembleMany(m, done)
+            val (nm, probs) = reassembleMany(m0, done)
             m = nm
             update { copy(manifest = m, working = false, readyToApply = true, problems = probs, status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "${done.size} scene(s) revised")) }
             say("Changed ${done.size} scene(s)" + (if (failed.isNotEmpty()) "; ${failed.joinToString()} could not be redesigned and stayed as they were" else "") + ". Tap “Add to timeline” to apply.")
@@ -682,16 +692,24 @@ class DirectorController(
         if (targets.isEmpty()) { say("Select at least one unlocked scene first.", error = true); return }
         job = scope.launch { guarded {
             status(DirectorStage.GENERATING_ANIMATIONS, "Restyling ${targets.size} scene(s)")
-            val done = targets.map { (i, target) ->
+            val current = m0.scenes.toMutableList()
+            val done = ArrayList<Scene>()
+            val failed = ArrayList<Int>()
+            for ((i, target) in targets) {
                 val v = (variantOffsets[target.id] ?: 0) + 1; variantOffsets[target.id] = v
-                val dna = com.example.studio.composer.StyleDNA.from(java.util.Random().nextInt(Int.MAX_VALUE))
+                val seed = StyleDNA.fromBrief(_ui.value.brief).seed xor (v * 977 + i * 31)
+                val dna = StyleDNA.from(seed)
                 val base = LocalBeatAnalyzer.analyze(target.narration, i, m0.scenes.size, target.durationMs)
                 val beat = com.example.studio.composer.Intent.parse(target.visualObjective.substringBefore(':'))?.let { base.copy(intent = it) } ?: base
-                target.copy(graph = SceneComposer.compose(beat, aspectOf(), variant = i + v, accentOverride = null, dna = dna), cues = SfxPlanner.cuesFor(beat, target.transitionIn))
+                val graph = SceneVarietyComposer.unique(beat, aspectOf(), dna, null, current.mapNotNull { it.graph })
+                if (graph == null) { failed += i + 1; continue }
+                val revised = target.copy(graph = graph, cues = SfxPlanner.cuesFor(beat, target.transitionIn))
+                current[i] = revised; done += revised
             }
+            if (done.isEmpty()) { fail("No unique layouts remained for the selected scenes; nothing was changed."); return@guarded }
             val (nm, probs) = reassembleMany(m0, done)
             update { copy(manifest = nm, working = false, readyToApply = true, problems = probs, status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "${done.size} scene(s) restyled")) }
-            say("Restyled ${done.size} scene(s). All other scenes are unchanged. Tap “Add to timeline” to apply.")
+            say("Restyled ${done.size} scene(s)." + (if (failed.isNotEmpty()) " Could not find a unique layout for ${failed.joinToString()}; those scenes are unchanged." else "") + " Tap “Add to timeline” to apply.")
         } }
     }
 
@@ -716,7 +734,9 @@ class DirectorController(
             val base = LocalBeatAnalyzer.analyze(text, index, m.scenes.size, cur.durationMs)
             val beat = com.example.studio.composer.Intent.parse(sc.visualObjective.substringBefore(':'))?.let { base.copy(intent = it) } ?: base
             val v = (variantOffsets[sc.id] ?: 0) + 1; variantOffsets[sc.id] = v
-            val ns = cur.copy(graph = SceneComposer.compose(beat, aspectOf(), variant = index + v, accentOverride = BrandKit.accent(appContext), dna = com.example.studio.composer.StyleDNA.fromAnswer(_ui.value.brief.answers["styleSeed"])), cues = SfxPlanner.cuesFor(beat, cur.transitionIn))
+            val graph = uniqueRedesign(beat, m.scenes, v, BrandKit.accent(appContext))
+                ?: run { fail("No unique layout remains for scene ${index + 1}; nothing was changed."); return@guarded }
+            val ns = cur.copy(graph = graph, cues = SfxPlanner.cuesFor(beat, cur.transitionIn))
             val nm = retimed.copy(scenes = retimed.scenes.map { if (it.id == ns.id) ns else it })
             narrationClips = clips
             val replaced = TimelineAssembler.clearAi(pendingProject ?: getProject(), setOf(sc.id))

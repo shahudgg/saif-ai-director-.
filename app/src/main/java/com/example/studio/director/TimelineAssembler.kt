@@ -160,7 +160,8 @@ object TimelineAssembler {
         footage: List<FootageRange> = emptyList(), captions: Boolean = true, replaceExisting: Boolean = true,
         voiceOverUri: String? = null, aspect: String? = null,
         sfx: Map<String, Pair<String, Long>> = emptyMap(),
-        captionStyle: String = com.example.studio.render.CaptionStyles.HORMOZI
+        captionStyle: String = com.example.studio.render.CaptionStyles.HORMOZI,
+        appendAfterExisting: Boolean = false
     ): Pair<StudioProject, List<String>> {
         val problems = mutableListOf<String>()
         var p = ensureLanes(if (replaceExisting) clearAi(base) else base)
@@ -170,7 +171,8 @@ object TimelineAssembler {
         val codeLane = laneId(p, TrackType.CODE, "lane_code_1"); val videoLane = laneId(p, TrackType.VIDEO, "lane_video_1")
         val visLane = laneId(p, TrackType.VISUAL, "lane_visual_1"); val textLane = laneId(p, TrackType.TEXT, "lane_text_1")
         val voiceLane = laneId(p, TrackType.VOICE, "lane_voice_1"); val audLane = laneId(p, TrackType.AUDIO, "lane_audio_1")
-        val tOffset = if (replaceExisting) 0L else p.totalDurationUs
+        // Scene-level edits preserve the manifest's original timestamps. Explicitly opt in to appending a whole new sequence.
+        val tOffset = if (appendAfterExisting) p.totalDurationUs else 0L
 
         manifest.scenes.sortedBy { it.startMs }.forEach { s ->
             val start = us(s.startMs) + tOffset; val dur = us(s.durationMs)

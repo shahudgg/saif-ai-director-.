@@ -36,12 +36,30 @@ data class RenderPlan(
                 tUs in item.startUs until (item.startUs + item.durationUs)
             }
 
-            val layers = visible.map { item ->
-                val localUs = tUs - item.startUs
+            // The director lays scenes end-to-end. During a geometric entrance, retain the
+            // immediately preceding code scene's last frame underneath the new scene instead of revealing black.
+            val frozenTimes = mutableMapOf<String, Long>()
+            val frozenZ = mutableMapOf<String, Int>()
+            val frozen = visible.mapNotNull { item ->
+                val incoming = item as? com.example.studio.model.CodeSceneItem ?: return@mapNotNull null
+                val animation = incoming.animIn ?: return@mapNotNull null
+                if (!TransitionFx.isGeometric(animation.type) || animation.durationUs <= 0 ||
+                    tUs - incoming.startUs !in 0 until animation.durationUs) return@mapNotNull null
+                val prev = project.items.asSequence().filterIsInstance<com.example.studio.model.CodeSceneItem>()
+                    .filter { it.laneId == incoming.laneId && it.startUs + it.durationUs == incoming.startUs && it.durationUs > 0L }
+                    .maxByOrNull { it.startUs } ?: return@mapNotNull null
+                if (visible.any { it.id == prev.id }) return@mapNotNull null
+                frozenTimes[prev.id] = prev.startUs + prev.durationUs - 1L
+                frozenZ[prev.id] = if (incoming.animationType == com.example.studio.director.SCENE_OVERLAY_MARKER) 34 else 9
+                prev
+            }.distinctBy { it.id }
+            val layers = (frozen + visible).map { item ->
+                val frameTime = frozenTimes[item.id] ?: tUs
+                val localUs = frameTime - item.startUs
                 val progress = if (item.durationUs > 0) (localUs.toFloat() / item.durationUs).coerceIn(0f, 1f) else 0f
 
                 // Resolve keyframe interpolated transform
-                val keyframeTransform = LayerMath.interpolateTransform(item.transform, item.keyframes, tUs)
+                val keyframeTransform = LayerMath.interpolateTransform(item.transform, item.keyframes, frameTime)
 
                 // Resolve animation in / out opacity
                 var opacity = keyframeTransform.opacity
@@ -80,7 +98,7 @@ data class RenderPlan(
                     progress = progress,
                     opacity = opacity.coerceIn(0f, 1f),
                     resolvedTransform = keyframeTransform.copy(opacity = opacity.coerceIn(0f, 1f)),
-                    zIndex = zIndex
+                    zIndex = frozenZ[item.id] ?: zIndex
                 )
             }.sortedBy { it.zIndex }
 
