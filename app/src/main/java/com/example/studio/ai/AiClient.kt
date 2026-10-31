@@ -3,6 +3,7 @@ package com.example.studio.ai
 import com.example.llm.LlmGateway
 import com.example.llm.LlmRequest
 import com.example.llm.LlmRole
+import kotlinx.coroutines.CancellationException
 
 data class AiCapabilities(
     val hasText: Boolean = true,
@@ -24,7 +25,9 @@ class AiClient(private val profile: AiProfile) {
         role: LlmRole,
         prompt: String,
         systemPrompt: String? = null,
-        maxTokens: Int? = null
+        maxTokens: Int? = null,
+        onChunk: suspend (String) -> Unit = {},
+        onAttemptStart: suspend (Int, String) -> Unit = { _, _ -> }
     ): Result<String> {
         if (!profile.isConfigured) {
             return Result.failure(IllegalStateException("AI Provider is not configured in Settings. Please add your API key in Settings -> AI Provider."))
@@ -37,18 +40,22 @@ class AiClient(private val profile: AiProfile) {
                 mode = "chat",
                 maxTokens = maxTokens
             )
-            val res = LlmGateway.call(
+            val res = LlmGateway.callObserved(
                 role = role,
                 provider = profile.provider,
                 apiKey = profile.apiKey,
                 model = profile.activeModel,
-                request = req
+                request = req,
+                onChunk = onChunk,
+                onAttemptStart = onAttemptStart
             )
             if (res.isSuccess) {
                 Result.success(res.getOrThrow().text)
             } else {
                 Result.failure(res.exceptionOrNull() ?: Exception("Unknown LLM error"))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -62,6 +69,6 @@ class AiClient(private val profile: AiProfile) {
                 imagesBase64 = imagesBase64.toList(), jsonMode = false)
             val res = LlmGateway.call(role, profile.provider, profile.apiKey, profile.activeModel, req)
             if (res.isSuccess) Result.success(res.getOrThrow().text) else Result.failure(res.exceptionOrNull() ?: Exception("Vision call failed"))
-        } catch (e: Exception) { Result.failure(e) }
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { Result.failure(e) }
     }
 }

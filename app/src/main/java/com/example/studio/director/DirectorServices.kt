@@ -17,6 +17,9 @@ import com.example.llm.ProviderProfile
 import com.example.studio.ai.AiClient
 import com.example.studio.ai.AiProfile
 import com.example.ui.components.TelegramAssetManager
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -27,7 +30,7 @@ data class AssetOutcome(val assets: List<ResolvedAsset>, val unresolved: List<St
 data class FootagePlan(val summary: String, val keep: List<FootageRange>, val overlays: List<Triple<Long, Long, String>>, val captions: Boolean, val usedAi: Boolean)
 
 /** All real work behind the four workflows. Every method reports failure honestly instead of faking output. */
-class DirectorServices(private val context: Context) {
+class DirectorServices(private val context: Context, private val activity: AgentActivity? = null) {
 
     fun providers(): List<ProviderEntry> {
         val prof = AiProfile.fromSettings(context)
@@ -38,15 +41,41 @@ class DirectorServices(private val context: Context) {
     fun can(c: Capability) = ProviderRegistry.route(providers(), c) is RouteResult.Routed
 
     /** Calls the configured model. An HTTP 200 with an empty body is treated as a failure and retried with backoff and a smaller token budget. */
-    private suspend fun llm(prompt: String, role: LlmRole = LlmRole.PLANNER, system: String = DirectorPrompts.SYSTEM_DIRECTOR, maxTokens: Int = 8000): Result<String> {
+    private suspend fun llm(
+        prompt: String, role: LlmRole = LlmRole.PLANNER, system: String = DirectorPrompts.SYSTEM_DIRECTOR,
+        maxTokens: Int = 8000, traceKind: ActivityKind = ActivityKind.MODEL, traceTitle: String = "Director model response"
+    ): Result<String> {
         val chain = ProviderRegistry.chain(providers(), Capability.CHAT)
+        var requestNumber = 0
         return ProviderRegistry.runWithFallback(chain) {
             var last: Throwable? = null
             var result: Result<String>? = null
             for (attempt in 0..2) {
+                currentCoroutineContext().ensureActive()
+                requestNumber++
                 val budget = if (attempt == 0) maxTokens else minOf(maxTokens, 3000)
-                val r = AiClient(AiProfile.fromSettings(context)).call(role, prompt, system, maxTokens = budget)
-                if (r.isSuccess && r.getOrThrow().isNotBlank()) { result = r; break }
+                var traceId: Long? = null
+                val r = try {
+                    val response = AiClient(AiProfile.fromSettings(context)).call(
+                        role, prompt, system, maxTokens = budget,
+                        onChunk = { chunk -> traceId?.let { id -> activity?.append(id, chunk) } },
+                        onAttemptStart = { transportAttempt, model ->
+                            traceId?.let { id -> activity?.finish(id, ActivityState.RETRIED, "Retrying after an incomplete attempt") }
+                            traceId = activity?.begin(traceKind, "$traceTitle · request $requestNumber · attempt $transportAttempt", "Model: $model")
+                        }
+                    )
+                    currentCoroutineContext().ensureActive()
+                    response
+                } catch (e: CancellationException) {
+                    traceId?.let { id -> activity?.finish(id, ActivityState.CANCELLED) }
+                    throw e
+                }
+                val usable = r.isSuccess && r.getOrThrow().isNotBlank()
+                traceId?.let { id ->
+                    activity?.finish(id, if (usable) ActivityState.SUCCEEDED else ActivityState.FAILED,
+                        if (usable) null else "The request did not return usable output")
+                }
+                if (usable) { result = r; break }
                 last = r.exceptionOrNull() ?: IllegalStateException("Empty response received from the model.")
                 val msg = last.message.orEmpty()
                 val emptyReply = msg.contains("Empty response", true) || r.isSuccess
@@ -64,9 +93,9 @@ class DirectorServices(private val context: Context) {
         if (b.scriptMode == ScriptMode.FULL_SCRIPT_PRESERVE) return ResearchOutcome(null, emptyList(), "Complete script supplied — research skipped.")
         val keyed = WebResearch.isConfigured(context)
         val topic = b.prompt.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(140).ifBlank { b.prompt.take(80) }
-        val askModel: suspend (String) -> Result<String> = { p -> llm(p, maxTokens = 500) }
+        val askModel: suspend (String) -> Result<String> = { p -> llm(p, maxTokens = 500, traceKind = ActivityKind.RESEARCH, traceTitle = "Research planning") }
         val ask = if (can(Capability.CHAT)) askModel else null
-        val deep = runCatching { DeepResearch.run(context, topic, keyed, ask, onStep) }.getOrNull()
+        val deep = cancellableResult { DeepResearch.run(context, topic, keyed, ask, onStep) }.getOrNull()
         if (deep != null && deep.digest != null) { lastDigest = deep.digest; return deep }
         // Fallback: the simple snippet research (Wikipedia + news) when the deep run found nothing.
         val kw = LocalBeatAnalyzer.keywords(b.prompt, 6).joinToString(" ").ifBlank { b.prompt.take(80) }
@@ -84,8 +113,8 @@ class DirectorServices(private val context: Context) {
     suspend fun writeScript(b: DirectorBrief, digest: String?): Result<String> {
         val words = SpeechTiming.targetWords(b.durationSec ?: 60, b.narrationLanguage, b.pace)
         if (b.scriptMode == ScriptMode.FULL_SCRIPT_PRESERVE && b.userScript.isNotBlank()) return Result.success(b.userScript.trim()) // preserved verbatim
-        val strategy = if (can(Capability.CHAT)) runCatching { capabilityProfile().strategy }.getOrNull() else null
-        val pipeline = ScriptPipeline(ask = { p -> llm(p) }, guard = { ModelOutputGuard.reason(it, b.narrationLanguage) })
+        val strategy = if (can(Capability.CHAT)) cancellableResult { capabilityProfile().strategy }.getOrNull() else null
+        val pipeline = ScriptPipeline(ask = { p -> llm(p, traceKind = ActivityKind.SCRIPT, traceTitle = "Script model response") }, guard = { ModelOutputGuard.reason(it, b.narrationLanguage) })
         return pipeline.run(b, digest, words, strategy).map { o ->
             lastScriptNote = buildString {
                 o.hook?.let { append("Hook: \"").append(it).append("\". ") }
@@ -98,7 +127,7 @@ class DirectorServices(private val context: Context) {
 
     /** A stronger opening line than [current], or a failure explaining why nothing changed. */
     suspend fun betterHook(b: DirectorBrief, current: String): Result<String> {
-        val pipeline = ScriptPipeline(ask = { p -> llm(p, maxTokens = 600) }, guard = { ModelOutputGuard.reason(it, b.narrationLanguage) })
+        val pipeline = ScriptPipeline(ask = { p -> llm(p, maxTokens = 600, traceKind = ActivityKind.SCRIPT, traceTitle = "Hook options") }, guard = { ModelOutputGuard.reason(it, b.narrationLanguage) })
         val opts = pipeline.hookOptions(b, null).filter { !it.equals(current.trim(), true) }
         if (opts.isEmpty()) return Result.failure(IllegalStateException("The model did not return usable hook options."))
         val best = HookScorer.best(opts)!!
@@ -110,7 +139,7 @@ class DirectorServices(private val context: Context) {
     suspend fun reviseScript(b: DirectorBrief, current: String, instruction: String): Result<String> {
         val prompt = "Revise this video narration script. Apply ONLY the requested change and keep everything else exactly as is.\n" +
             "Change: $instruction\nLanguage: ${b.narrationLanguage ?: "same as the script"}\nOutput the full narration only, no labels, brackets or commentary.\n---\n$current"
-        val r = llm(prompt)
+        val r = llm(prompt, traceKind = ActivityKind.SCRIPT, traceTitle = "Script revision")
         if (r.isFailure) return Result.failure(r.exceptionOrNull()!!)
         val text = VoiceoverScript.clean(r.getOrThrow())
         if (text.length <= 40) return Result.failure(IllegalStateException("Model returned an empty script"))
@@ -129,7 +158,8 @@ class DirectorServices(private val context: Context) {
         var problem = ""
         repeat(2) {
             val prompt = BeatPlanner.directivePrompt(b.narrationLanguage ?: "the narration language", b.style ?: "clean", outs, total) + problem
-            val r = llm(prompt, maxTokens = if (strategy == Strategy.LIGHT) 600 else 1300)
+            val r = llm(prompt, maxTokens = if (strategy == Strategy.LIGHT) 600 else 1300,
+                traceKind = ActivityKind.PLANNING, traceTitle = "Scene planning directives")
             if (r.isFailure) return Result.failure(r.exceptionOrNull()!!)
             val raw = r.getOrThrow()
             ModelOutputGuard.reason(raw, b.narrationLanguage)?.let { problem = "\nYour previous reply $it. Reply with clean JSON only."; return@repeat }
@@ -172,7 +202,7 @@ class DirectorServices(private val context: Context) {
 
         // How much to trust the configured model is measured once per provider+model (see CapabilityProbe).
         val chatReady = can(Capability.CHAT)
-        val prof = if (chatReady) runCatching { capabilityProfile() }.getOrNull() else null
+        val prof = if (chatReady) cancellableResult { capabilityProfile() }.getOrNull() else null
         val strategy = prof?.strategy
         val directives = HashMap<Int, BeatPlanner.Directive>()   // 0-based beat index
         val modelScenes = HashMap<Int, Scene>()                  // STRONG strategy: validated model-drafted scenes
@@ -191,6 +221,7 @@ class DirectorServices(private val context: Context) {
         if (batchSize > 0) {
             val batches = outlines.withIndex().toList().chunked(batchSize)
             for ((bi, batch) in batches.withIndex()) {
+                currentCoroutineContext().ensureActive()
                 onProgress(bi + 1, batches.size)
                 if (modelDown != null) break
                 val outs = batch.map { it.value }
@@ -210,35 +241,40 @@ class DirectorServices(private val context: Context) {
                         cacheGraphs.add(fixed)
                     }
                     if (cacheValid) {
+                        activity?.instant(ActivityKind.SCENE_JSON, "Cached scene batch accepted", "${outs.size} scenes passed validation and uniqueness checks.")
                         batch.forEachIndexed { k, iv -> modelScenes[iv.index] = cached[k]!! }
                         acceptedGraphs.clear(); acceptedGraphs.addAll(cacheGraphs)
                         continue
                     }
                     var accepted: List<Scene>? = null
                     var problem = ""
+                    fun reject(reason: String): String {
+                        activity?.instant(ActivityKind.SCENE_JSON, "Scene batch rejected", reason)
+                        return reason
+                    }
                     for (attempt in 1..attemptsPerBatch) {
-                        val call = llm(DirectorPrompts.sceneBatchV2(b, batch.map { it.index to it.value }, total, fps, problem) { o -> SceneFacts.forScene(digestFacts, o.narration) }, maxTokens = 6000)
+                        val call = llm(DirectorPrompts.sceneBatchV2(b, batch.map { it.index to it.value }, total, fps, problem) { o -> SceneFacts.forScene(digestFacts, o.narration) }, maxTokens = 6000, traceKind = ActivityKind.SCENE_JSON, traceTitle = "Scene definitions · declarative JSON")
                         if (call.isFailure) { modelDown = call.exceptionOrNull(); break }
                         val raw = call.getOrThrow()
                         val rawBad = ModelOutputGuard.reason(raw, b.narrationLanguage)
-                        if (rawBad != null) { problem = "Your previous reply $rawBad. Reply with clean JSON only."; continue }
+                        if (rawBad != null) { problem = reject("Your previous reply $rawBad. Reply with clean JSON only."); continue }
                         val parsed = SceneJson.parseManifest(raw)
-                        if (parsed.isFailure) { problem = "Your previous reply was not complete valid JSON. Keep each scene compact and reply with ONLY the JSON object."; continue }
+                        if (parsed.isFailure) { problem = reject("Your previous reply was not complete valid JSON. Keep each scene compact and reply with ONLY the JSON object."); continue }
                         val got = parsed.getOrThrow().scenes
-                        if (got.size < outs.size) { problem = "You returned ${got.size} scenes but exactly ${outs.size} are required."; continue }
+                        if (got.size < outs.size) { problem = reject("You returned ${got.size} scenes but exactly ${outs.size} are required."); continue }
                         val merged = outs.mapIndexed { i, o -> got[i].copy(id = o.id, startMs = o.startMs, endMs = o.endMs, narration = o.narration) }
                         val textBad = merged.firstNotNullOfOrNull { ModelOutputGuard.reason(ScenePlanner.sceneText(it), b.narrationLanguage) }
-                        if (textBad != null) { problem = "Your previous reply $textBad. Reply with clean text only."; continue }
+                        if (textBad != null) { problem = reject("Your previous reply $textBad. Reply with clean text only."); continue }
                         val fatal = SceneValidator.fatal(SceneValidator.validate(SceneManifest(fps = fps, scenes = merged)))
-                        if (fatal.isNotEmpty()) { problem = "Fix these problems: " + fatal.take(5).joinToString("; ") { it.message }; continue }
+                        if (fatal.isNotEmpty()) { problem = reject("Fix these problems: " + fatal.take(5).joinToString("; ") { it.message }); continue }
                         val lintBad = merged.firstNotNullOfOrNull { sc -> sc.graph?.let { gr -> SceneLint.problems(SceneLint.adoptCards(gr, aw, ah), aw, ah).firstOrNull() } }
-                        if (lintBad != null) { problem = "Design problem: $lintBad. Every scene needs a clear visual that explains its narration, labels inside their shapes, and no empty blocks."; continue }
+                        if (lintBad != null) { problem = reject("Design problem: $lintBad. Every scene needs a clear visual that explains its narration, labels inside their shapes, and no empty blocks."); continue }
                         // Same gate the final build uses (after automatic repair), so a scene that would be thrown away later is fixed NOW by the model.
                         val layoutBad = merged.firstNotNullOfOrNull { sc -> sc.graph?.let { gr ->
                             val fx = LayoutEngine.repair(SceneLint.adoptCards(gr, aw, ah), aw, ah, sc.durationMs).graph
                             LayoutEngine.issues(fx, aw, ah, sc.durationMs).firstOrNull()?.toString()
                         } }
-                        if (layoutBad != null) { problem = "Layout problem: $layoutBad. Keep every element fully inside the frame, text inside its shape, and elements apart from each other."; continue }
+                        if (layoutBad != null) { problem = reject("Layout problem: $layoutBad. Keep every element fully inside the frame, text inside its shape, and elements apart from each other."); continue }
                         // ANTI-TEMPLATE GATE: no scene may repeat one already accepted, in this batch or earlier.
                         var uniqBad: String? = null
                         val running = ArrayList<SceneGraph>(acceptedGraphs)
@@ -249,8 +285,10 @@ class DirectorServices(private val context: Context) {
                             if (why != null) { uniqBad = why; break }
                             running.add(fixed)
                         }
-                        if (uniqBad != null) { problem = "Originality problem: $uniqBad"; continue }
-                        accepted = merged; break
+                        if (uniqBad != null) { problem = reject("Originality problem: $uniqBad"); continue }
+                        accepted = merged
+                        activity?.instant(ActivityKind.SCENE_JSON, "Scene batch accepted", "${merged.size} scenes passed validation and uniqueness checks.")
+                        break
                     }
                     if (accepted == null) failedBatches++
                     accepted?.let { ok ->
@@ -279,6 +317,7 @@ class DirectorServices(private val context: Context) {
         val dna = StyleDNA.fromBrief(b)
         val scenes = ArrayList<Scene>()
         outlines.forEachIndexed { i, o ->
+            currentCoroutineContext().ensureActive()
             val beat = beats[i]
             val tr = TransitionPlanner.pick(beat, prevTransition).also { prevTransition = it }
             val dur = o.endMs - o.startMs
@@ -318,6 +357,7 @@ class DirectorServices(private val context: Context) {
         if (transcript != null) m = alignToTranscript(m, transcript)
         val fatal = SceneValidator.fatal(SceneValidator.validate(m, estMs))
         if (fatal.isNotEmpty()) return Result.failure(IllegalStateException(fatal.take(4).joinToString("; ") { it.message }))
+        activity?.instant(ActivityKind.PLANNING, "Scene plan accepted", "${scenes.size} validated scenes; $localCount designed locally.")
         return Result.success(m.copy(fps = fps))
     }
 
@@ -346,14 +386,28 @@ class DirectorServices(private val context: Context) {
         val clips = mutableListOf<NarrationClip>(); val fails = mutableListOf<String>()
         val withText = m.scenes.filter { it.narration.isNotBlank() }
         val groups = VoiceGroups.build(withText)
-        groups.forEachIndexed { i, g ->
-            onScene(i + 1, groups.size)
-            val text = g.joinToString(" ") { it.narration.trim() }
-            DeviceSpeech.synthesize(context, text, b.narrationLanguage, b.pace, dir, g.first().id).fold(
-                { c -> clips += NarrationClip(g.first().id, "file://${c.file.absolutePath}", c.durationMs, text, if (g.size > 1) g.map { it.id } else emptyList()) },
-                { e -> fails += "Scene ${g.first().id}: ${e.message}" })
-        }
-        DeviceSpeech.release()
+        try {
+            groups.forEachIndexed { i, g ->
+                currentCoroutineContext().ensureActive()
+                val text = g.joinToString(" ") { it.narration.trim() }
+                val event = activity?.begin(ActivityKind.NARRATION, "Narrating ${g.joinToString { it.id }}")
+                try {
+                    DeviceSpeech.synthesize(context, text, b.narrationLanguage, b.pace, dir, g.first().id).fold(
+                        { c ->
+                            clips += NarrationClip(g.first().id, "file://${c.file.absolutePath}", c.durationMs, text, if (g.size > 1) g.map { it.id } else emptyList())
+                            event?.let { activity?.finish(it, detail = "Audio created · ${c.durationMs} ms") }
+                        },
+                        { e ->
+                            fails += "Scene ${g.first().id}: ${e.message}"
+                            event?.let { activity?.finish(it, ActivityState.FAILED, e.message ?: "Speech synthesis failed") }
+                        })
+                } catch (e: CancellationException) {
+                    event?.let { activity?.finish(it, ActivityState.CANCELLED) }
+                    throw e
+                }
+                onScene(i + 1, groups.size) // count finished attempts, not work that has merely started
+            }
+        } finally { DeviceSpeech.release() }
         // Clips are silence-trimmed, so a short natural pause between sentences is enough.
         val retimed = SceneTiming.retimeGrouped(m, clips, padMs = 170L)
         return NarrationOutcome(clips, retimed, fails)
@@ -405,7 +459,7 @@ class DirectorServices(private val context: Context) {
     suspend fun curateAssets(b: DirectorBrief, m: SceneManifest, userId: String, onItem: (Int, Int) -> Unit = { _, _ -> }): AssetOutcome {
         val resolved = mutableListOf<ResolvedAsset>(); val unresolved = mutableListOf<String>(); val notes = mutableListOf<String>()
         val token = WebResearch.telegramToken(context)
-        val all = if (token.isBlank()) emptyList() else runCatching { TelegramAssetManager.syncChannelAssets(botToken = token, context = context) }.getOrDefault(emptyList())
+        val all = if (token.isBlank()) emptyList() else cancellableResult { TelegramAssetManager.syncChannelAssets(botToken = token, context = context) }.getOrDefault(emptyList())
         val usable = AssetCurator.usable(all, userId)
         libraryProblem(token, usable.size)?.let { notes += it; return AssetOutcome(emptyList(), emptyList(), notes) }
         if (!can(Capability.CHAT)) {
@@ -416,7 +470,8 @@ class DirectorServices(private val context: Context) {
         }
         val entries = AssetCurator.shortlist(usable, m.scenes)
         val keyMap = entries.associateBy { it.key }
-        val call = llm(AssetCurator.prompt(b, m.scenes, entries), maxTokens = 3500)
+        val call = llm(AssetCurator.prompt(b, m.scenes, entries), maxTokens = 3500,
+            traceKind = ActivityKind.ASSET_SEARCH, traceTitle = "Asset curation")
         val plan = call.getOrNull()?.takeIf { ModelOutputGuard.reason(it) == null }?.let { AssetCurator.parse(it, entries, m.scenes) }
         if (plan == null) {
             notes += "The AI asset editor could not answer (${call.exceptionOrNull()?.message ?: "unusable reply"}); matched by keywords instead."
@@ -491,15 +546,34 @@ class DirectorServices(private val context: Context) {
         val unresolved = ArrayList<String>()
         val notes = ArrayList<String>()
         val needs = ArrayList<AssetNeed>()
-        val log = ArrayList<String>()
+        val log = object : ArrayList<String>() {
+            override fun add(element: String): Boolean {
+                val kind = when {
+                    element.contains("ACCEPTED", ignoreCase = true) -> ActivityKind.ASSET_ACCEPTED
+                    element.contains("rejected", ignoreCase = true) || element.contains("could not be downloaded", ignoreCase = true) -> ActivityKind.ASSET_REJECTED
+                    else -> ActivityKind.ASSET_SEARCH
+                }
+                val title = when (kind) {
+                    ActivityKind.ASSET_ACCEPTED -> "Asset accepted"
+                    ActivityKind.ASSET_REJECTED -> "Asset rejected"
+                    else -> "Asset hunt"
+                }
+                activity?.instant(kind, title, element)
+                return super.add(element)
+            }
+        }
         lastHuntLog = log
+        fun report(step: HuntStep) {
+            activity?.instant(ActivityKind.ASSET_SEARCH, "Asset search", step.text)
+            onStep(step)
+        }
 
         val token = WebResearch.telegramToken(context)
         if (token.isBlank()) {
             notes += "Telegram asset library is not configured (no bot token in this build). Add TG_BOT_TOKEN and TG_CHAT_ID as GitHub secrets and rebuild."
             return AssetOutcome(emptyList(), emptyList(), notes)
         }
-        val all = runCatching { TelegramAssetManager.syncChannelAssets(botToken = token, context = context) }.getOrDefault(emptyList())
+        val all = cancellableResult { TelegramAssetManager.syncChannelAssets(botToken = token, context = context) }.getOrDefault(emptyList())
         val library = AssetLibrary.usable(all, userId)
         libraryProblem(token, library.size)?.let { notes += it; return AssetOutcome(emptyList(), emptyList(), notes) }
 
@@ -521,6 +595,7 @@ class DirectorServices(private val context: Context) {
         var done = 0
 
         for (sl in slots) {
+            currentCoroutineContext().ensureActive()
             done++
             var current: HuntNeed? = null
             var accepted: ResolvedAsset? = null
@@ -530,11 +605,12 @@ class DirectorServices(private val context: Context) {
             var tryNo = 0
 
             hunt@ while (tryNo < AssetHunter.MAX_TRIES && accepted == null) {
+                currentCoroutineContext().ensureActive()
                 tryNo++
                 // 1. ONE need for this place (the model, or a deterministic seed when no model answers).
                 var need = current
                 if (need == null) {
-                    onStep(HuntStep(done, slots.size, "Scene ${sl.sceneIndex + 1}/${sl.sceneCount} · deciding what this moment needs", (done - 1f) / slots.size))
+                    report(HuntStep(done, slots.size, "Scene ${sl.sceneIndex + 1}/${sl.sceneCount} · deciding what this moment needs", (done - 1f) / slots.size))
                     val asked = askNeed(title, sl, library.size, sampleAll, chat)
                     need = asked ?: AssetHunter.seedNeed(sl)
                     if (asked == null) log += "Scene ${sl.sceneIndex + 1}: the model did not answer, so the keywords were taken from the narration."
@@ -545,7 +621,7 @@ class DirectorServices(private val context: Context) {
                     }
                     current = need
                 }
-                onStep(HuntStep(done, slots.size, AssetHunter.stepText(sl, need, need.keywords, tryNo, resolved.size), (done - 1f) / slots.size))
+                report(HuntStep(done, slots.size, AssetHunter.stepText(sl, need, need.keywords, tryNo, resolved.size), (done - 1f) / slots.size))
 
                 // 2. search the local catalog with those two or three keywords, filtered by the wanted format.
                 var hits = AssetLibrary.search(library, need.keywords, need.ext, limit = 3, avoidIds = used, strictFormat = true)
@@ -560,6 +636,7 @@ class DirectorServices(private val context: Context) {
 
                 // 3. download and LOOK AT the best hits, one by one.
                 for (c in hits) {
+                    currentCoroutineContext().ensureActive()
                     val dl = TelegramAssetManager.downloadCandidate(context, userId, c, token)
                     val path = dl?.localCachedPath
                     if (path == null) {
@@ -632,7 +709,7 @@ class DirectorServices(private val context: Context) {
 
             if (accepted != null) {
                 resolved += accepted
-                onStep(HuntStep(done, slots.size, "Scene ${sl.sceneIndex + 1}/${sl.sceneCount} · placed · ${resolved.size} asset(s) so far", done.toFloat() / slots.size))
+                report(HuntStep(done, slots.size, "Scene ${sl.sceneIndex + 1}/${sl.sceneCount} · placed · ${resolved.size} asset(s) so far", done.toFloat() / slots.size))
             } else if (uploadRequest != null) {
                 needs += AssetNeed(sl.sceneId, if (sl.isSfx) "sfx" else (current?.kind ?: "video"), uploadRequest.take(160))
                 unresolved += "${sl.sceneId}/${sl.slotId}: nothing suitable in the library for \"${(current?.what ?: uploadRequest).take(50)}\" — asked on Telegram"
@@ -652,7 +729,8 @@ class DirectorServices(private val context: Context) {
     /** Asks the model for exactly ONE asset need for ONE place on the timeline. */
     private suspend fun askNeed(title: String, sl: HuntSlot, librarySize: Int, sample: List<String>, chat: Boolean): HuntNeed? {
         if (!chat) return null
-        val raw = llm(AssetHunter.needPrompt(title, sl, librarySize, sample), maxTokens = 900).getOrNull() ?: return null
+        val raw = llm(AssetHunter.needPrompt(title, sl, librarySize, sample), maxTokens = 900,
+            traceKind = ActivityKind.ASSET_SEARCH, traceTitle = "Asset need").getOrNull() ?: return null
         if (ModelOutputGuard.reason(raw) != null) return null
         return AssetHunter.parseNeed(raw, sl)
     }
@@ -662,7 +740,8 @@ class DirectorServices(private val context: Context) {
         sl: HuntSlot, need: HuntNeed, attempts: List<HuntAttempt>, librarySize: Int, sample: List<String>, chat: Boolean
     ): HuntNeed? {
         if (!chat) return fallbackRevise(sl, need, attempts)
-        val raw = llm(AssetHunter.revisePrompt(sl, need, attempts, sample, librarySize), maxTokens = 500).getOrNull()
+        val raw = llm(AssetHunter.revisePrompt(sl, need, attempts, sample, librarySize), maxTokens = 500,
+            traceKind = ActivityKind.ASSET_SEARCH, traceTitle = "Asset search revision").getOrNull()
             ?: return fallbackRevise(sl, need, attempts)
         if (ModelOutputGuard.reason(raw) != null) return fallbackRevise(sl, need, attempts)
         return AssetHunter.parseRevision(raw, sl, need) ?: fallbackRevise(sl, need, attempts)
@@ -684,7 +763,7 @@ class DirectorServices(private val context: Context) {
         val kinds = m.scenes.flatMap { s -> s.cues.map { it.kind } }.toSet()
         val out = HashMap<String, String>()
         for (kind in kinds) {
-            val cands = runCatching { TelegramAssetManager.rankCandidates(context, userId, "sfx", listOf(kind, "sfx"), limit = 2, botToken = token) }.getOrDefault(emptyList())
+            val cands = cancellableResult { TelegramAssetManager.rankCandidates(context, userId, "sfx", listOf(kind, "sfx"), limit = 2, botToken = token) }.getOrDefault(emptyList())
             for (c in cands) {
                 if (c.type != "audio") continue
                 val dl = TelegramAssetManager.downloadCandidate(context, userId, c, token) ?: continue
@@ -701,7 +780,8 @@ class DirectorServices(private val context: Context) {
         fun fr(r: TimeRange, why: String) = FootageRange(uri, r.startMs, r.endMs, a.width, a.height, why)
         val fallback = VideoAnalyzer.silenceTrimPlan(a)
         val tx = transcript?.let { t -> JSONArray().also { arr -> t.segments.forEach { arr.put(JSONObject().put("s", it.startMs).put("e", it.endMs).put("t", it.text)) } }.toString() }
-        val raw = if (can(Capability.CHAT)) llm(DirectorPrompts.footageAnalysisPlan(b, a.toJson().toString(), tx)).getOrNull() else null
+        val raw = if (can(Capability.CHAT)) llm(DirectorPrompts.footageAnalysisPlan(b, a.toJson().toString(), tx),
+            traceKind = ActivityKind.PLANNING, traceTitle = "Footage edit plan").getOrNull() else null
         val parsed = raw?.let { runCatching { JSONObject(SceneJson.extractJson(it)) }.getOrNull() }
         val keeps = parsed?.optJSONArray("keep")?.let { arr -> (0 until arr.length()).mapNotNull { i ->
             val o = arr.getJSONObject(i); val s = o.optLong("startMs"); val e = o.optLong("endMs")
@@ -717,14 +797,16 @@ class DirectorServices(private val context: Context) {
     suspend fun narrationForFootage(b: DirectorBrief, a: VideoAnalysis, tr: Transcript?, keep: List<FootageRange>): Result<List<Triple<Long, Long, String>>> {
         val keepJson = JSONArray().also { arr -> keep.forEach { arr.put(JSONObject().put("startMs", it.sourceInMs).put("endMs", it.sourceOutMs)) } }.toString()
         val tx = tr?.let { t -> JSONArray().also { arr -> t.segments.forEach { arr.put(JSONObject().put("s", it.startMs).put("e", it.endMs).put("t", it.text)) } }.toString() }
-        return llm(DirectorPrompts.narrationFromFootage(b, a.toJson().toString(), tx, keepJson)).mapCatching { raw ->
+        return llm(DirectorPrompts.narrationFromFootage(b, a.toJson().toString(), tx, keepJson),
+            traceKind = ActivityKind.SCRIPT, traceTitle = "Footage narration").mapCatching { raw ->
             val arr = JSONObject(SceneJson.extractJson(raw)).getJSONArray("segments")
             (0 until arr.length()).map { i -> val o = arr.getJSONObject(i); Triple(o.getLong("atMs"), o.optLong("maxMs", 6000L), o.getString("text")) }.filter { it.third.isNotBlank() }
                 .also { require(it.isNotEmpty()) { "Model returned no narration segments" } }
         }
     }
 
-    suspend fun revisionCall(prompt: String): Result<String> = llm(prompt)
+    suspend fun revisionCall(prompt: String): Result<String> = llm(prompt,
+        traceKind = ActivityKind.SCENE_JSON, traceTitle = "Scene revision · declarative JSON")
 
     fun uriOf(s: String): Uri = Uri.parse(s)
 }

@@ -13,6 +13,7 @@ import android.speech.tts.UtteranceProgressListener
 import com.example.data.local.ProviderSettingsManager
 import com.example.llm.KeyStoreCrypto
 import com.example.llm.ProviderProfile
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -166,7 +167,10 @@ object Transcriber {
             val clean = segs.filter { it.text.isNotBlank() }
             if (clean.isEmpty()) Result.failure(IllegalStateException("No speech detected in the audio"))
             else Result.success(Transcript(clean, lang, profile.displayName))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
             Result.failure(IllegalStateException("Transcription failed: ${e.javaClass.simpleName}"))
         }
     }
@@ -274,6 +278,7 @@ object DeviceSpeech {
                         @Deprecated("Deprecated in Java") override fun onError(utteranceId: String?) { if (utteranceId == id && cont.isActive) cont.resume(false) }
                     })
                     val rc = tts.synthesizeToFile(spoken, Bundle(), file, id)
+                    cont.invokeOnCancellation { runCatching { tts.stop(); file.delete() } }
                     if (rc != TextToSpeech.SUCCESS && cont.isActive) cont.resume(false)
                 }
             } ?: false
