@@ -81,9 +81,16 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
     val wf = controller.workflow
     var input by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var checkingMusic by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val scrollScope = androidx.compose.runtime.rememberCoroutineScope()
     BackHandler(onBack = onClose)
-    LaunchedEffect(ui.turns.size) { if (ui.turns.isNotEmpty()) listState.animateScrollToItem(ui.turns.size) }
+    LaunchedEffect(ui.turns.size) {
+        if (ui.turns.size > 1) listState.animateScrollToItem(ui.turns.size - 1 + if (wf == DirectorWorkflow.ZERO_TO_VIDEO) 1 else 0)
+    }
+    LaunchedEffect(ui.liveScenes.isNotEmpty()) {
+        if (ui.liveScenes.isNotEmpty()) listState.animateScrollToItem(ui.turns.size + if (wf == DirectorWorkflow.ZERO_TO_VIDEO) 1 else 0)
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
@@ -103,15 +110,32 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                 Text(wf.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 Text(wf.subtitle, color = Color(0xFF9E95AC), fontSize = 10.sp, maxLines = 1)
             }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO) TextButton(onClick = { scrollScope.launch { listState.animateScrollToItem(0) } }) { Text("Brief", color = Cyan, fontSize = 11.sp) }
             IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Research & asset keys", tint = Color(0xFFCCC3D9)) }
         }
 
         LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(ui.turns, key = { it.id }) { t -> Bubble(t, onAnswer = controller::answer, onSkip = controller::skip, onEdit = controller::editAnswer) }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO) item(key = "guided-brief") {
+                GuidedBriefPanel(ui.brief, editingBrief = !ui.working && ui.manifest == null, editingMusic = !ui.working && !checkingMusic,
+                    onOption = controller::selectBriefOption, onVoice = controller::selectNarrationVoice, onMusic = controller::selectBackgroundMusic,
+                    musicScope = scrollScope, onMusicBusy = { checkingMusic = it })
+            }
+            items(ui.turns, key = { it.id }) { t -> Bubble(t,
+                canAnswer = !ui.working && !checkingMusic && (wf != DirectorWorkflow.ZERO_TO_VIDEO || ui.manifest == null) && (t.cardAnswered != null || t.id == ui.turns.lastOrNull()?.id),
+                onAnswer = controller::answer, onSkip = controller::skip, onEdit = controller::editAnswer) }
             item {
                 val st = ui.status
                 if (st != null) StatusPanel(st.label, st.detail, st.fraction, st.failed, ui.working, ui.paused,
                     onPause = { controller.setPaused(!ui.paused) }, onCancel = controller::cancel)
+                if (ui.liveScenes.isNotEmpty()) LiveStoryboard(ui.liveScenes, ui.brief.aspect ?: "9:16")
+                if (ui.problems.isNotEmpty()) Surface(shape = RoundedCornerShape(12.dp), color = Glass, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("PRODUCTION NOTES", color = Color(0xFFFFB86B), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        val notes = ui.problems.sortedBy { if (it.startsWith("Music ")) 0 else 1 }
+                        notes.take(12).forEach { Text("• $it", color = Color(0xFFCCC3D9), fontSize = 10.sp) }
+                        if (notes.size > 12) Text("${notes.size - 12} more notes", color = Color(0xFF9E95AC), fontSize = 10.sp)
+                    }
+                }
                 AgentActivityPanel(activity)
                 if (ui.sources.isNotEmpty()) Surface(shape = RoundedCornerShape(12.dp), color = Glass, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     Column(Modifier.padding(10.dp)) {
@@ -122,10 +146,10 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                 ui.manifest?.let { m -> Surface(shape = RoundedCornerShape(12.dp), color = Glass, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     Column(Modifier.padding(10.dp)) {
                         Text("Scene plan • ${m.scenes.size} scenes • ${m.totalMs / 1000}s", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        val canPick = !ui.working && (ui.readyToApply || ui.applied)
+                        val canPick = !ui.working && !checkingMusic && (ui.readyToApply || ui.applied)
                         if (canPick) Text("Use a card to change only that scene", color = Color(0xFF9E95AC), fontSize = 10.sp)
                         SceneCards(m, canPick, ctx0 = ctx, aspect = ui.brief.aspect ?: "9:16",
-                            onVariant = controller::regenerateVariant, onLock = controller::toggleLock, onEdit = { i -> input = "Scene ${i + 1}: " },
+                            onVariant = controller::regenerateVariant, onLock = controller::toggleLock,
                             onStyle = controller::changeStyle, onText = controller::editSceneText, onAsset = controller::replaceAsset, onBulk = controller::reviseScenes)
                     }
                 } }
@@ -136,10 +160,10 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
-            if (ui.awaitingBriefConfirm && !ui.working) Button(onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
-            if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
-            if (ui.readyToApply && !ui.working) Button(onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
-            if (ui.status?.failed == true && !ui.working) Button(onClick = controller::retry, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B))) { Text("Retry") }
+            if (ui.awaitingBriefConfirm && !ui.working) Button(enabled = !checkingMusic, onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
+            if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(enabled = !checkingMusic, onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
+            if (ui.readyToApply && !ui.working) Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
+            if (ui.status?.failed == true && !ui.working) Button(enabled = !checkingMusic, onClick = controller::retry, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B))) { Text("Retry") }
             if (ui.script.isNotBlank() && !ui.working) OutlinedButton(onClick = {
                 val uri = com.example.studio.director.VoiceoverExport.save(ctx, "voiceover", controller.voiceoverText())
                 if (uri == null) Toast.makeText(ctx, "Could not save the voiceover script", Toast.LENGTH_SHORT).show()
@@ -152,17 +176,17 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                     }
                 }
             }) { Text("Voiceover script") }
-            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(onClick = controller::strengthenHook) { Text("Stronger hook") }
-            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(onClick = controller::refreshAssets) { Text("Check Telegram again") }
+            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::strengthenHook) { Text("Stronger hook") }
+            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::refreshAssets) { Text("Check Telegram again") }
             if (ui.applied) OutlinedButton(onClick = onClose) { Text("Back to timeline") }
-            if (!ui.working) TextButton(onClick = controller::resetConversation) { Text("New chat", color = Color(0xFF9E95AC)) }
+            if (!ui.working) TextButton(enabled = !checkingMusic, onClick = controller::resetConversation) { Text("New chat", color = Color(0xFF9E95AC)) }
         }
 
         Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f), enabled = !ui.working,
+            OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f), enabled = !ui.working && !checkingMusic,
                 placeholder = { Text(if (ui.script.isNotBlank() && !ui.scriptApproved) "Describe script changes…" else if (ui.readyToApply || ui.applied) "e.g. “Scene 2: make it a bar chart”" else "Message the AI Director…", fontSize = 13.sp) },
                 maxLines = 5, shape = RoundedCornerShape(16.dp))
-            IconButton(onClick = { if (input.isNotBlank()) { controller.send(input); input = "" } }, enabled = !ui.working) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = Cyan) }
+            IconButton(onClick = { if (input.isNotBlank()) { controller.send(input); input = "" } }, enabled = !ui.working && !checkingMusic) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = Cyan) }
         }
     }
     if (showSettings) KeysDialog(onDismiss = { showSettings = false })
@@ -170,36 +194,36 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Bubble(t: ChatTurn, onAnswer: (String, String) -> Unit, onSkip: (String) -> Unit, onEdit: (String) -> Unit) {
+private fun Bubble(t: ChatTurn, canAnswer: Boolean, onAnswer: (String, String) -> Unit, onSkip: (String) -> Unit, onEdit: (String) -> Unit) {
     val mine = t.fromUser
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Surface(shape = RoundedCornerShape(16.dp), color = if (t.isError) Color(0xFF3A1620) else if (mine) Purple else Glass, modifier = Modifier.widthIn(max = 330.dp)) {
             Text(t.text, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(12.dp), lineHeight = 18.sp)
         }
-        t.card?.let { card -> QuestionCardView(card, t.cardAnswered, onAnswer, onSkip, onEdit) }
+        t.card?.let { card -> QuestionCardView(card, t.cardAnswered, canAnswer, onAnswer, onSkip, onEdit) }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun QuestionCardView(card: QuestionCard, answered: String?, onAnswer: (String, String) -> Unit, onSkip: (String) -> Unit, onEdit: (String) -> Unit) {
+private fun QuestionCardView(card: QuestionCard, answered: String?, enabled: Boolean, onAnswer: (String, String) -> Unit, onSkip: (String) -> Unit, onEdit: (String) -> Unit) {
     var custom by remember { mutableStateOf(false) }; var text by remember { mutableStateOf("") }
     Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFF110E1A), border = BorderStroke(1.dp, Purple.copy(alpha = 0.4f)), modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) {
         Column(Modifier.padding(10.dp)) {
             if (answered != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("✓ $answered", color = Cyan, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { onEdit(card.key) }) { Text("Edit", fontSize = 11.sp) }
+                    TextButton(enabled = enabled, onClick = { onEdit(card.key) }) { Text("Edit", fontSize = 11.sp) }
                 }
             } else {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    card.options.forEach { o -> Chip(o) { onAnswer(card.key, o) } }
-                    if (card.allowCustom) Chip(QuestionCard.CUSTOM, highlight = custom) { custom = !custom }
-                    if (card.optional) Chip("Skip") { onSkip(card.key) }
+                    card.options.forEach { o -> Chip(o, enabled = enabled) { onAnswer(card.key, o) } }
+                    if (card.allowCustom) Chip(QuestionCard.CUSTOM, highlight = custom, enabled = enabled) { custom = !custom }
+                    if (card.optional) Chip("Skip", enabled = enabled) { onSkip(card.key) }
                 }
                 if (custom) {
-                    OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().padding(top = 8.dp), placeholder = { Text(card.customHint, fontSize = 12.sp) }, maxLines = 4)
-                    Button(onClick = { if (text.isNotBlank()) onAnswer(card.key, text) }, modifier = Modifier.padding(top = 6.dp), colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Use this") }
+                    OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().padding(top = 8.dp), enabled = enabled, placeholder = { Text(card.customHint, fontSize = 12.sp) }, maxLines = 4)
+                    Button(enabled = enabled, onClick = { if (text.isNotBlank()) onAnswer(card.key, text) }, modifier = Modifier.padding(top = 6.dp), colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Use this") }
                 }
             }
         }
@@ -207,9 +231,9 @@ private fun QuestionCardView(card: QuestionCard, answered: String?, onAnswer: (S
 }
 
 @Composable
-private fun Chip(label: String, highlight: Boolean = false, onClick: () -> Unit) {
-    Surface(shape = RoundedCornerShape(20.dp), color = if (highlight) Purple else Color(0xFF211B2E), modifier = Modifier.clickable(onClick = onClick)) {
-        Text(label, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
+private fun Chip(label: String, highlight: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    Surface(shape = RoundedCornerShape(20.dp), color = if (highlight) Purple else Color(0xFF211B2E), modifier = Modifier.clickable(enabled = enabled, onClick = onClick)) {
+        Text(label, color = if (enabled) Color.White else Color(0xFF9E95AC), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
     }
 }
 
@@ -349,7 +373,7 @@ private fun ProductionOptions() {
 @Composable
 private fun SceneCards(
     m: com.example.studio.director.SceneManifest, canAct: Boolean, ctx0: android.content.Context, aspect: String,
-    onVariant: (Int) -> Unit, onLock: (Int) -> Unit, onEdit: (Int) -> Unit,
+    onVariant: (Int) -> Unit, onLock: (Int) -> Unit,
     onStyle: (List<Int>) -> Unit, onText: (Int, String) -> Unit, onAsset: (Int) -> Unit, onBulk: (List<Int>, String) -> Unit
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
@@ -377,6 +401,8 @@ private fun SceneCards(
         items(count = m.scenes.size, key = { idx -> m.scenes[idx].id }) { i ->
             val s: com.example.studio.director.Scene = m.scenes[i]
             val isSel = i in selected
+            var asking by remember(s.id) { mutableStateOf(false) }
+            var instruction by remember(s.id) { mutableStateOf("") }
             Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF1E1929), border = if (isSel) BorderStroke(2.dp, Cyan) else null, modifier = Modifier.widthIn(min = 170.dp, max = 190.dp)) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Box {
@@ -391,7 +417,14 @@ private fun SceneCards(
                         TextButton(modifier = minH, enabled = canAct && !s.locked, contentPadding = pad, onClick = { tap(); onAsset(i) }) { Text("Replace asset", fontSize = 11.sp) }
                         TextButton(modifier = minH, enabled = canAct && !s.locked, contentPadding = pad, onClick = { tap(); onStyle(listOf(i)) }) { Text("Change style", fontSize = 11.sp) }
                         TextButton(modifier = minH, enabled = canAct, contentPadding = pad, onClick = { tap(); onLock(i) }) { Text(if (s.locked) "Unlock" else "Lock", fontSize = 11.sp) }
-                        TextButton(modifier = minH, enabled = canAct && !s.locked, contentPadding = pad, onClick = { onEdit(i) }) { Text("Ask AI…", fontSize = 11.sp) }
+                        TextButton(modifier = minH, enabled = canAct && !s.locked, contentPadding = pad, onClick = { tap(); asking = !asking }) { Text(if (asking) "Close edit" else "Ask AI…", fontSize = 11.sp) }
+                    }
+                    if (asking && canAct && !s.locked) {
+                        OutlinedTextField(instruction, { instruction = it }, Modifier.fillMaxWidth(), maxLines = 3,
+                            placeholder = { Text("What should change in this scene?", fontSize = 11.sp) })
+                        TextButton(enabled = instruction.isNotBlank(), onClick = { tap(); onBulk(listOf(i), instruction.trim()); instruction = ""; asking = false }) {
+                            Text("Revise scene ${i + 1}", color = Cyan, fontSize = 11.sp)
+                        }
                     }
                 }
             }
@@ -405,12 +438,36 @@ private fun SceneCards(
     }
 }
 
+/** Only validated drafts emitted by the real planning pipeline appear here. */
+@Composable
+private fun LiveStoryboard(scenes: List<com.example.studio.director.Scene>, aspect: String) {
+    Surface(shape = RoundedCornerShape(12.dp), color = Glass, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("LIVE STORYBOARD · ${scenes.size} validated draft${if (scenes.size == 1) "" else "s"}", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("Planning is in progress. Drafts may change before the final scene plan; editing unlocks when production is ready.", color = Color(0xFF9E95AC), fontSize = 10.sp)
+            androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(count = scenes.size, key = { scenes[it].id }) { index ->
+                    val scene = scenes[index]
+                    Surface(shape = RoundedCornerShape(10.dp), color = Color(0xFF211B2E), modifier = Modifier.widthIn(min = 140.dp, max = 150.dp)) {
+                        Column(Modifier.padding(7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (scene.graph != null) SceneThumb(scene, aspect)
+                            else Text("No renderable graph yet", color = Color(0xFF9E95AC), fontSize = 10.sp)
+                            Text("${index + 1}. ${scene.visualObjective.take(45)}", color = Color.White, fontSize = 10.sp, maxLines = 2)
+                            Text("${scene.startMs / 1000}s–${scene.endMs / 1000}s", color = Color(0xFF9E95AC), fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 48 dp minimum touch target for the small text buttons on scene cards. */
 private fun Modifier.androidx_minTouch(): Modifier = this.then(Modifier.heightIn(min = 48.dp))
 
 @Composable
 private fun SceneThumb(s: com.example.studio.director.Scene, aspect: String) {
-    val bmp = remember(s.id, s.graph) {
+    val bmp = remember(s.id, s.graph, s.durationMs, aspect) {
         val (aw, ah) = com.example.studio.composer.LayoutEngine.parseAspect(aspect)
         val w = 270; val h = (270f * ah / aw).toInt().coerceIn(150, 480)
         val b = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)

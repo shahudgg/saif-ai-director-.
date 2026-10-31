@@ -244,7 +244,7 @@ object DeviceSpeech {
     /** Frees the shared engine. Called when a narration batch is finished. */
     fun release() { try { shared?.shutdown() } catch (_: Exception) {}; shared = null }
 
-    suspend fun synthesize(context: Context, text: String, language: String?, pace: String?, outDir: File, tag: String): Result<Clip> = lock.withLock {
+    suspend fun synthesize(context: Context, text: String, language: String?, pace: String?, outDir: File, tag: String, voiceId: String? = null): Result<Clip> = lock.withLock {
         outDir.mkdirs()
         val file = File(outDir, "${tag}_${UUID.randomUUID().toString().take(8)}.wav")
         val tts = engine(context) ?: return@withLock Result.failure(IllegalStateException("Device speech engine did not start"))
@@ -258,8 +258,9 @@ object DeviceSpeech {
             if (fallback == TextToSpeech.LANG_MISSING_DATA || fallback == TextToSpeech.LANG_NOT_SUPPORTED)
                 return@withLock Result.failure(IllegalStateException("This device has no voice for ${language ?: "that language"}. Install it in Android TTS settings."))
         }
-        // One voice everywhere: the narration uses the voice the user picked in the main Settings panel.
-        val profile = com.example.utils.SaifVoice.narrationProfile(context)
+        // A per-video choice takes precedence; otherwise use the app-wide narration voice.
+        val profile = com.example.ui.components.VOICE_PROFILES.firstOrNull { it.id == voiceId }
+            ?: com.example.utils.SaifVoice.narrationProfile(context)
         val paceMul = when (pace?.lowercase()) { "slow" -> 0.9f; "fast" -> 1.12f; else -> 1.0f }
         tts.setPitch(profile.pitch)
         tts.setSpeechRate((profile.speechRate.coerceIn(0.9f, 1.08f) * paceMul).coerceIn(0.7f, 1.4f))

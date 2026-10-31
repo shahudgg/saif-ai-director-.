@@ -17,6 +17,8 @@ object TTSManager : TextToSpeech.OnInitListener {
         val onStart: (() -> Unit)?, val onDone: (() -> Unit)?
     )
     private val queuedSpeech = mutableListOf<PendingSpeech>()
+    private data class PendingPreview(val context: Context, val text: String, val voiceId: String, val onUnavailable: (() -> Unit)?)
+    private var queuedPreview: PendingPreview? = null
 
     private val _currentlySpeakingText = MutableStateFlow<String?>(null)
     val currentlySpeakingText: StateFlow<String?> = _currentlySpeakingText
@@ -35,6 +37,7 @@ object TTSManager : TextToSpeech.OnInitListener {
     }
 
     private val utteranceCallbacks = java.util.concurrent.ConcurrentHashMap<String, Pair<(() -> Unit)?, (() -> Unit)?>>()
+    private val previewFailures = java.util.concurrent.ConcurrentHashMap<String, () -> Unit>()
     private var lastAppliedVoiceId: String = ""
     private var lastAppliedIsHindi: Boolean = false
 
@@ -51,6 +54,7 @@ object TTSManager : TextToSpeech.OnInitListener {
                 override fun onDone(utteranceId: String?) {
                     _currentlySpeakingText.value = null
                     if (utteranceId != null) {
+                        previewFailures.remove(utteranceId)
                         val cb = utteranceCallbacks.remove(utteranceId)?.second
                         cb?.invoke()
                     }
@@ -61,6 +65,7 @@ object TTSManager : TextToSpeech.OnInitListener {
                 override fun onError(utteranceId: String?) {
                     _currentlySpeakingText.value = null
                     if (utteranceId != null) {
+                        previewFailures.remove(utteranceId)?.invoke()
                         val cb = utteranceCallbacks.remove(utteranceId)?.second
                         cb?.invoke()
                     }
@@ -72,13 +77,18 @@ object TTSManager : TextToSpeech.OnInitListener {
             val pending = queuedSpeech.toList()
             queuedSpeech.clear()
             pending.forEach { speakInternal(it.text, it.context, it.queueMode, it.onStart, it.onDone) }
+            val preview = queuedPreview; queuedPreview = null
+            preview?.let { previewVoice(it.context, it.text, it.voiceId, it.onUnavailable) }
         } else {
             Log.e("TTSManager", "Initialization failed")
             val pending = queuedSpeech.toList()
             queuedSpeech.clear()
             _currentlySpeakingText.value = null
             _isSpeaking.value = false
+            val preview = queuedPreview; queuedPreview = null
+            runCatching { tts?.shutdown() }; tts = null; isReady = false
             pending.forEach { it.onDone?.invoke() }
+            preview?.onUnavailable?.invoke()
         }
     }
 
@@ -204,8 +214,9 @@ object TTSManager : TextToSpeech.OnInitListener {
         tts?.setSpeechRate(smoothRate)
     }
 
-    fun previewVoice(context: Context, text: String, voiceId: String) {
+    @Synchronized fun previewVoice(context: Context, text: String, voiceId: String, onUnavailable: (() -> Unit)? = null) {
         if (!isReady) {
+            queuedPreview = PendingPreview(context.applicationContext, text, voiceId, onUnavailable)
             init(context)
             return
         }
@@ -220,7 +231,12 @@ object TTSManager : TextToSpeech.OnInitListener {
         _currentlySpeakingText.value = text
         val utteranceId = "preview_id_${System.currentTimeMillis()}"
         val params = android.os.Bundle().apply { putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId) }
-        tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+        previewFailures.clear() // QUEUE_FLUSH replaces any older preview
+        onUnavailable?.let { previewFailures[utteranceId] = it }
+        if (tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, params, utteranceId) != TextToSpeech.SUCCESS) {
+            _currentlySpeakingText.value = null
+            previewFailures.remove(utteranceId)?.invoke()
+        }
     }
 
     fun speak(text: String, context: Context, onStart: (() -> Unit)? = null, onDone: (() -> Unit)? = null) {
@@ -280,9 +296,11 @@ object TTSManager : TextToSpeech.OnInitListener {
 
     @Synchronized fun stop() {
         queuedSpeech.clear()
+        queuedPreview = null
         _isSpeaking.value = false
         _currentlySpeakingText.value = null
         utteranceCallbacks.clear()
+        previewFailures.clear()
         try {
             tts?.stop()
         } catch (e: Exception) {

@@ -170,7 +170,8 @@ fun StudioAudioLayers(plan: RenderPlan, isPlaying: Boolean, onError: (String) ->
         players.filterKeys { it !in activeIds }.forEach { (id, p) -> runCatching { p.release() }; players.remove(id) }
         active.forEach { item ->
             val uri = when (item) { is VoiceItem -> item.audioUri; is AudioItem -> item.audioUri; else -> null }
-            val volume = when (item) { is VoiceItem -> item.volume; is AudioItem -> item.volume; else -> 1f }
+            val voiceActive = active.any { it is VoiceItem }
+            val volume = com.example.studio.audio.AudioMixer.calculateEffectiveGain(item, plan.timeUs, voiceActive).coerceIn(0f, 1f)
             if (uri.isNullOrBlank() || item.id in failed) return@forEach
             val localMs = ((plan.timeUs - item.startUs) / 1000L).toInt().coerceAtLeast(0)
             var p = players[item.id]
@@ -185,6 +186,8 @@ fun StudioAudioLayers(plan: RenderPlan, isPlaying: Boolean, onError: (String) ->
             }
             p ?: return@forEach
             try {
+                // Match export's fades and voice ducking as the playhead moves.
+                p.setVolume(volume, volume)
                 if (kotlin.math.abs(p.currentPosition - localMs) > 250) p.seekTo(localMs)
                 if (isPlaying && !p.isPlaying) p.start() else if (!isPlaying && p.isPlaying) p.pause()
             } catch (_: IllegalStateException) { players.remove(item.id) }
