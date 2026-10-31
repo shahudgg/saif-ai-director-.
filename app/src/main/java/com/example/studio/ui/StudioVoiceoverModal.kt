@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,27 +42,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.example.studio.ai.AiProfile
-import com.example.studio.model.TrackType
-import com.example.studio.model.VoiceItem
-import com.example.studio.state.StudioAction
 import com.example.studio.state.StudioViewModel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import java.util.UUID
 
 data class VoiceProfile(
     val id: String,
@@ -77,12 +67,6 @@ fun StudioVoiceoverModal(
     viewModel: StudioViewModel,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val aiProfile = remember { AiProfile.fromSettings(context) }
-    val voiceLaneId = remember {
-        viewModel.uiState.value.project.lanes.firstOrNull { it.trackType == TrackType.VOICE }?.id ?: "lane_voice_1"
-    }
 
     var scriptText by remember {
         mutableStateOf("Every frame tells a story. Step into the future of creative neural video production.")
@@ -99,7 +83,6 @@ fun StudioVoiceoverModal(
     )
 
     var selectedVoice by remember { mutableStateOf(voices[0]) }
-    var isSynthesizing by remember { mutableStateOf(false) }
 
     // Dynamic word count & Level 3 duration formula
     val wordCount = remember(scriptText) {
@@ -112,7 +95,7 @@ fun StudioVoiceoverModal(
     }
 
     Dialog(
-        onDismissRequest = { if (!isSynthesizing) onDismiss() },
+        onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Box(
@@ -158,7 +141,7 @@ fun StudioVoiceoverModal(
                             Column {
                                 Text("AI Voiceover Studio", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = "Neural TTS • ${aiProfile.provider}",
+                                    text = "Voice preview • no speech synthesis here",
                                     color = Color(0xFFA78BFA),
                                     fontSize = 11.sp
                                 )
@@ -166,7 +149,7 @@ fun StudioVoiceoverModal(
                         }
 
                         IconButton(
-                            onClick = { if (!isSynthesizing) onDismiss() },
+                            onClick = onDismiss,
                             modifier = Modifier.size(28.dp)
                         ) {
                             Icon(Icons.Default.Close, contentDescription = "Close", tint = Color(0xFFCCC3D9))
@@ -294,49 +277,10 @@ fun StudioVoiceoverModal(
 
                     Spacer(modifier = Modifier.height(18.dp))
 
-                    // Generate & Insert Button
-                    Button(
-                        onClick = {
-                            isSynthesizing = true
-                            scope.launch {
-                                delay(600)
-                                val currentPlayheadUs = viewModel.clock.currentTimeUs.value
-                                val durationUs = (calculatedDurationSec * 1_000_000L).toLong()
-
-                                val voiceItem = VoiceItem(
-                                    id = "voice_${UUID.randomUUID().toString().take(8)}",
-                                    laneId = voiceLaneId,
-                                    startUs = currentPlayheadUs,
-                                    durationUs = durationUs,
-                                    text = scriptText.trim(),
-                                    speakerTone = selectedVoice.name,
-                                    speed = speechRate,
-                                    audioDucking = audioDucking,
-                                    label = "🎙️ AI_${selectedVoice.name}",
-                                    origin = "ai_tts",
-                                    aiWhy = "Neural TTS narration with ${selectedVoice.name}"
-                                )
-
-                                viewModel.commit(StudioAction.AddItem(voiceItem))
-                                viewModel.selectItem(voiceItem.id)
-                                isSynthesizing = false
-                                onDismiss()
-                            }
-                        },
-                        enabled = !isSynthesizing && scriptText.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF8B5CF6)),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        if (isSynthesizing) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Synthesizing Neural Speech...", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        } else {
-                            Icon(Icons.Default.Mic, contentDescription = null, tint = Color.White)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Insert Voiceover to Timeline", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        }
+                    Text("Voice choices in this panel are a preview only; no audio is generated here. Use SAIF Director to create and insert real narration.",
+                        color = Color(0xFFCCC3D9), fontSize = 11.sp, modifier = Modifier.padding(bottom = 10.dp))
+                    Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                        Text("Voiceover unavailable here")
                     }
                 }
             }

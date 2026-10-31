@@ -3,6 +3,8 @@ package com.example.llm
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -98,6 +100,17 @@ object LlmClient {
         request: LlmRequest,
         onChunk: suspend (String) -> Unit = {},
         onThinking: (suspend (String) -> Unit)? = null
+    ): Result<LlmResponse> = streamDetailedObserved(providerName, apiKey, modelName, request, onChunk, onThinking, null)
+
+    /** Reports a fresh attempt before any output. Retries never share a text buffer. */
+    suspend fun streamDetailedObserved(
+        providerName: String,
+        apiKey: String,
+        modelName: String,
+        request: LlmRequest,
+        onChunk: suspend (String) -> Unit = {},
+        onThinking: (suspend (String) -> Unit)? = null,
+        onAttemptStart: (suspend (String) -> Unit)? = null
     ): Result<LlmResponse> = withContext(Dispatchers.IO) {
         val decrypted = KeyStoreCrypto.decrypt(apiKey)
         val cleanKey = (if (decrypted.isNotBlank()) decrypted else apiKey).trim()
@@ -168,6 +181,10 @@ object LlmClient {
         while (attemptCount < maxAttempts) {
             attemptCount++
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            onAttemptStart?.invoke(cleanModel)
+            // A child job is cancelled as soon as the caller cancels, even while OkHttp is blocked
+            // in execute() or reading an SSE body. Completing it in finally avoids retaining calls.
+            val attemptJob = Job(currentCoroutineContext()[Job])
             try {
                 val fullText = StringBuilder()
                 val thinkingBuffer = StringBuilder()
@@ -186,7 +203,8 @@ object LlmClient {
                         request = request,
                         maxTokens = maxTokensToUse,
                         sendTemperature = sendTemperature,
-                        mergeSystemIntoUser = mergeSystemIntoUser
+                        mergeSystemIntoUser = mergeSystemIntoUser,
+                        cancellationJob = attemptJob
                     )
                     isAnthropic -> executeAnthropic(
                         profile = profile,
@@ -195,7 +213,8 @@ object LlmClient {
                         request = request,
                         maxTokens = maxTokensToUse,
                         sendTemperature = sendTemperature,
-                        mergeSystemIntoUser = mergeSystemIntoUser
+                        mergeSystemIntoUser = mergeSystemIntoUser,
+                        cancellationJob = attemptJob
                     )
                     else -> executeOpenAiCompatible(
                         profile = profile,
@@ -205,7 +224,8 @@ object LlmClient {
                         maxTokens = maxTokensToUse,
                         useCompletionTokensParam = useCompletionTokensParam,
                         sendTemperature = sendTemperature,
-                        mergeSystemIntoUser = mergeSystemIntoUser
+                        mergeSystemIntoUser = mergeSystemIntoUser,
+                        cancellationJob = attemptJob
                     )
                 }
 
@@ -394,8 +414,10 @@ object LlmClient {
                                         onChunk(cleanedChunk)
                                     }
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
-                                // Ignore SSE parsing glitches
+                                // Ignore SSE parsing glitches, but never swallow cancellation.
                             }
                         } else if (trimmedLine.startsWith("0:\"") && trimmedLine.endsWith("\"")) {
                             val inner = trimmedLine.substring(3, trimmedLine.length - 1)
@@ -443,7 +465,8 @@ object LlmClient {
                             useCompletionTokensParam = useCompletionTokensParam,
                             sendTemperature = sendTemperature,
                             mergeSystemIntoUser = mergeSystemIntoUser,
-                            stream = false
+                            stream = false,
+                            cancellationJob = attemptJob
                         )
                         if (nonStreamResp.isSuccessful) {
                             val nonStreamBody = nonStreamResp.body?.string().orEmpty()
@@ -457,7 +480,10 @@ object LlmClient {
                         } else {
                             nonStreamResp.close()
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
+                        currentCoroutineContext().ensureActive()
                         Log.w(TAG, "Non-streaming fallback failed: ${e.message}")
                     }
                 }
@@ -484,6 +510,7 @@ object LlmClient {
             } catch (e: RequestTooLargeException) {
                 throw e
             } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
                 val err = parseException(profile.displayName, cleanModel, e)
                 lastError = err
                 if (attemptCount < maxAttempts && (err.category == LlmErrorCategory.NETWORK || err.category == LlmErrorCategory.TIMEOUT)) {
@@ -491,6 +518,8 @@ object LlmClient {
                     continue
                 }
                 return@withContext Result.failure(err)
+            } finally {
+                attemptJob.complete()
             }
         }
         Result.failure(lastError ?: LlmError(profile.displayName, cleanModel, null, "All retry attempts failed.", LlmErrorCategory.UNKNOWN))
@@ -559,6 +588,12 @@ object LlmClient {
 
     // --- Provider Implementations ---
 
+    private fun executeCancellable(request: Request, job: Job): Response {
+        val call = httpClient.newCall(request)
+        job.invokeOnCompletion { cause -> if (cause != null) call.cancel() }
+        return call.execute()
+    }
+
     private fun executeOpenAiCompatible(
         profile: ProviderProfile,
         apiKey: String,
@@ -568,7 +603,8 @@ object LlmClient {
         useCompletionTokensParam: Boolean,
         sendTemperature: Boolean,
         mergeSystemIntoUser: Boolean,
-        stream: Boolean = true
+        stream: Boolean = true,
+        cancellationJob: Job
     ): Response {
         val url = "${profile.baseUrl.trimEnd('/')}${profile.chatPath}"
         val normalizedModel = when {
@@ -702,13 +738,13 @@ object LlmClient {
             }
             .build()
 
-        var initialResp = httpClient.newCall(httpReq).execute()
+        var initialResp = executeCancellable(httpReq, cancellationJob)
         // If Ashna AI returns 404 on /v1/api/chat/completions, try fallback to /v1/chat/completions
         if (isAshna && initialResp.code == 404 && url.contains("/v1/api/chat/completions")) {
             val altUrl = url.replace("/v1/api/chat/completions", "/v1/chat/completions")
             initialResp.close()
             val altReq = httpReq.newBuilder().url(altUrl).build()
-            initialResp = httpClient.newCall(altReq).execute()
+            initialResp = executeCancellable(altReq, cancellationJob)
         }
         return initialResp
     }
@@ -720,7 +756,8 @@ object LlmClient {
         request: LlmRequest,
         maxTokens: Int,
         sendTemperature: Boolean,
-        mergeSystemIntoUser: Boolean
+        mergeSystemIntoUser: Boolean,
+        cancellationJob: Job
     ): Response {
         val url = "${profile.baseUrl.trimEnd('/')}${profile.chatPath}"
         val root = JSONObject().apply {
@@ -775,7 +812,7 @@ object LlmClient {
             .addHeader("anthropic-version", "2023-06-01")
             .build()
 
-        return httpClient.newCall(httpReq).execute()
+        return executeCancellable(httpReq, cancellationJob)
     }
 
     private fun executeGemini(
@@ -785,7 +822,8 @@ object LlmClient {
         request: LlmRequest,
         maxTokens: Int,
         sendTemperature: Boolean,
-        mergeSystemIntoUser: Boolean
+        mergeSystemIntoUser: Boolean,
+        cancellationJob: Job
     ): Response {
         val rawModel = model.removePrefix("models/").trim()
         val cleanModel = rawModel.ifBlank { GeminiModelCatalog.DEFAULT_MODEL }
@@ -846,7 +884,7 @@ object LlmClient {
             .post(root.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        return httpClient.newCall(httpReq).execute()
+        return executeCancellable(httpReq, cancellationJob)
     }
 
     // --- Stream Parsers & Metadata ---

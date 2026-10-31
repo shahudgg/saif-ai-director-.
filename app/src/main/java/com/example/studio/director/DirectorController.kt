@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -135,7 +137,10 @@ class DirectorController(
     private val appContext: Context, val projectId: String, val workflow: DirectorWorkflow,
     var getProject: () -> StudioProject, var applyProject: (StudioProject) -> Unit
 ) {
-    private val services = DirectorServices(appContext)
+    private val activityBus = AgentActivity()
+    val activity: StateFlow<List<ActivityEvent>> = activityBus.events
+    private var activeStage: Pair<DirectorStage, Long>? = null
+    private val services = DirectorServices(appContext, activityBus)
     private val store = DirectorStore(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var job: Job? = null
@@ -158,7 +163,33 @@ class DirectorController(
 
     init { if (_ui.value.turns.isEmpty()) greet() else if (_ui.value.working) update { copy(working = false, status = null) } }
 
-    private fun update(f: DirectorUi.() -> DirectorUi) { _ui.value = _ui.value.f(); store.save(projectId, _ui.value) }
+    @Synchronized
+    private fun update(f: DirectorUi.() -> DirectorUi) {
+        val previous = _ui.value
+        val next = previous.f()
+        _ui.value = next
+        if (previous.working && !next.working) {
+            finishStage(if (next.status?.failed == true) ActivityState.FAILED else ActivityState.SUCCEEDED)
+        }
+        store.save(projectId, next)
+    }
+
+    private fun stageKind(stage: DirectorStage): ActivityKind = when (stage) {
+        DirectorStage.RESEARCHING -> ActivityKind.RESEARCH
+        DirectorStage.WRITING_SCRIPT -> ActivityKind.SCRIPT
+        DirectorStage.PLANNING_SCENES -> ActivityKind.PLANNING
+        DirectorStage.GENERATING_ANIMATIONS -> ActivityKind.SCENE_JSON
+        DirectorStage.FINDING_ASSETS, DirectorStage.CHECKING_ASSETS -> ActivityKind.ASSET_SEARCH
+        DirectorStage.GENERATING_NARRATION -> ActivityKind.NARRATION
+        DirectorStage.BUILDING_TIMELINE -> ActivityKind.TIMELINE
+        DirectorStage.ANALYZING_SOURCE -> ActivityKind.SOURCE
+        else -> ActivityKind.MODEL
+    }
+
+    private fun finishStage(state: ActivityState) {
+        activeStage?.let { activityBus.finish(it.second, state) }
+        activeStage = null
+    }
     /** Long-lived facts about the owner's channel. Everything else (a one-off topic) stays out of memory. */
     private fun rememberAnswer(key: String, value: String) {
         val v = value.trim()
@@ -179,8 +210,14 @@ class DirectorController(
 
     private fun say(text: String, error: Boolean = false, card: QuestionCard? = null) =
         update { copy(turns = turns + ChatTurn(fromUser = false, text = text, card = card, isError = error)) }
-    private fun status(stage: DirectorStage, label: String, fraction: Float? = null, detail: String = "") =
+    @Synchronized
+    private fun status(stage: DirectorStage, label: String, fraction: Float? = null, detail: String = "") {
+        if (activeStage?.first != stage) {
+            finishStage(ActivityState.SUCCEEDED)
+            activeStage = stage to activityBus.begin(stageKind(stage), label, detail)
+        } else activeStage?.let { activityBus.detail(it.second, detail, label) }
         update { copy(status = JobStatus(stage, label, fraction, detail), working = true) }
+    }
 
     private fun greet() {
         val msg = when (workflow) {
@@ -237,14 +274,32 @@ class DirectorController(
         if (card != null) say("Let's redo that one.", card = card)
     }
 
-    fun cancel() { job?.cancel(); job = null; update { copy(working = false, status = null, paused = false) }; pausedFlow.value = false; say("Cancelled. Everything saved so far is kept — nothing was added to your timeline.") }
+    @Synchronized
+    fun cancel() {
+        job?.cancel(); job = null
+        finishStage(ActivityState.CANCELLED)
+        activityBus.cancelOpen()
+        update { copy(working = false, status = null, paused = false) }
+        pausedFlow.value = false
+        say("Cancelled. Everything saved so far is kept — nothing was added to your timeline.")
+    }
     fun setPaused(p: Boolean) { pausedFlow.value = p; update { copy(paused = p) } }
-    private suspend fun gate() { if (pausedFlow.value) pausedFlow.first { !it } }
+    private suspend fun gate() {
+        currentCoroutineContext().ensureActive()
+        if (pausedFlow.value) pausedFlow.first { !it }
+        currentCoroutineContext().ensureActive()
+    }
 
     /** Clean spoken narration only (no citations, labels, markdown) — exactly what a voice artist or TTS tool should read. */
     fun voiceoverText(): String = VoiceoverScript.clean(_ui.value.script)
 
-    fun resetConversation() { job?.cancel(); store.clear(projectId, workflow); narrationClips = emptyList(); assets = emptyList(); pendingProject = null; _ui.value = DirectorUi(workflow, DirectorBrief(workflow)); greet() }
+    @Synchronized
+    fun resetConversation() {
+        job?.cancel(); job = null
+        activeStage = null; activityBus.clear(); pausedFlow.value = false
+        store.clear(projectId, workflow); narrationClips = emptyList(); assets = emptyList(); pendingProject = null
+        _ui.value = DirectorUi(workflow, DirectorBrief(workflow)); greet()
+    }
 
     // ---------------- stage machine ----------------
 
@@ -294,6 +349,7 @@ class DirectorController(
             say(r.note)
             status(DirectorStage.WRITING_SCRIPT, "Writing the script")
             script = services.writeScript(_ui.value.brief, r.digest).getOrElse { fail("Script writing failed: ${it.message}"); return }
+            gate()
             val words = SpeechTiming.countWords(script); val target = b.durationSec?.let { SpeechTiming.targetWords(it, b.narrationLanguage, b.pace) }
             update { copy(script = script, scriptApproved = false, working = false, status = JobStatus(DirectorStage.AWAITING_SCRIPT_APPROVAL, "Script ready for your review")) }
             say("Here is the script ($words words${target?.let { ", target ≈ $it" } ?: ""}). Reply with changes, or tap Approve.${services.lastScriptNote.takeIf { it.isNotBlank() }?.let { "\n($it)" } ?: ""}\n\n$script")
@@ -330,11 +386,13 @@ class DirectorController(
         ensureSeed()
         val b = _ui.value.brief
         status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations")
-        var manifest = services.planManifest(b, script, onProgress = { i, n -> status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations", i.toFloat() / n, "Batch $i of $n") }).getOrElse { fail("Scene planning failed: ${it.message}"); return }
+        var manifest = services.planManifest(b, script, onProgress = { i, n -> status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations", (i - 1f) / n, "Batch $i of $n") }).getOrElse { fail("Scene planning failed: ${it.message}"); return }
+        gate()
         services.lastPlanNote.takeIf { it.isNotBlank() }?.let { say(it) }
-        gate(); update { copy(manifest = manifest) }
+        update { copy(manifest = manifest) }
         status(DirectorStage.GENERATING_NARRATION, "Generating narration", detail = "0/${manifest.scenes.size}")
         val nar = services.synthNarration(b, manifest) { i, n -> status(DirectorStage.GENERATING_NARRATION, "Generating narration", i.toFloat() / n, "$i/$n") }
+        gate()
         if (nar.clips.isEmpty()) { fail("Narration could not be generated. " + nar.failures.firstOrNull().orEmpty()); return }
         manifest = nar.manifest; narrationClips = nar.clips; gate()
         // The asset hunter fills the timeline ONE ASSET AT A TIME: it looks at one place, asks for that one file
@@ -345,16 +403,18 @@ class DirectorController(
         val ao = if (useLibrary) services.huntAssets(b, manifest, "default", onStep = { step ->
             status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
         }) else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; graphics are generated."), emptyList())
-        assets = ao.assets
+        gate(); assets = ao.assets
         val requestNote = if (useLibrary) requestNeeds(b, manifest, ao) else null
         // Scenes that got a real library sound do not also get a synthetic one on top.
         manifest = manifest.copy(scenes = manifest.scenes.map { sc -> if (assets.any { it.sceneId == sc.id && it.kind == "audio" }) sc.copy(cues = emptyList()) else sc })
-        sfxLib = runCatching { services.resolveSfxLibrary(manifest, "default") }.getOrDefault(emptyMap())
+        sfxLib = cancellableResult { services.resolveSfxLibrary(manifest, "default") }.getOrDefault(emptyMap())
+        gate()
         store.saveArtifacts(projectId, workflow, narrationClips, assets)
         status(DirectorStage.BUILDING_TIMELINE, "Building the timeline")
         val (p, probs) = TimelineAssembler.assemble(getProject(), manifest, narrationClips, assets, captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
             sfx = SfxFiles.render(appContext, manifest, library = { kind -> sfxLibrary(kind) }), captionStyle = BrandKit.captionStyle(appContext))
         val all = nar.failures + ao.notes + listOfNotNull(requestNote) + ao.unresolved + probs
+        gate()
         update { copy(manifest = manifest, problems = all, working = false, readyToApply = true,
             status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "Ready — ${manifest.scenes.size} scenes, ${narrationClips.size} narration clips, ${assets.size} verified assets")) }
         pendingProject = p
@@ -377,21 +437,23 @@ class DirectorController(
         ensureSeed()
         val b2 = _ui.value.brief
         status(DirectorStage.PLANNING_SCENES, "Planning scenes from your narration")
-        var m = services.planManifest(b2, tr.fullText, tr, total, onProgress = { i, n -> status(DirectorStage.PLANNING_SCENES, "Planning scenes from your narration", i.toFloat() / n, "Batch $i of $n") }, researchDigest = null).getOrElse { fail("Scene planning failed: ${it.message}"); return }
+        var m = services.planManifest(b2, tr.fullText, tr, total, onProgress = { i, n -> status(DirectorStage.PLANNING_SCENES, "Planning scenes from your narration", (i - 1f) / n, "Batch $i of $n") }, researchDigest = null).getOrElse { fail("Scene planning failed: ${it.message}"); return }
+        gate()
         services.lastPlanNote.takeIf { it.isNotBlank() }?.let { say(it) }
         m = m.copy(scenes = m.scenes.mapIndexed { i, s -> if (i == m.scenes.lastIndex) s.copy(endMs = maxOf(s.endMs, total)) else s })
-        update { copy(manifest = m) }; gate()
+        update { copy(manifest = m) }
         status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
         val ao = if (b.assetPolicy?.startsWith("Generate", true) == true) AssetOutcome(emptyList(), emptyList(), emptyList())
             else services.huntAssets(b, m, "default", onStep = { step ->
                 status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
             })
-        assets = ao.assets
+        gate(); assets = ao.assets
         val reqNote = requestNeeds(b, m, ao)
         store.saveArtifacts(projectId, workflow, narrationClips, assets)
         status(DirectorStage.BUILDING_TIMELINE, "Building the timeline")
         val (p, probs) = TimelineAssembler.assemble(getProject(), m, emptyList(), assets, captions = b.subtitles?.startsWith("No", true) != true, voiceOverUri = b.sourceUri, aspect = b.aspect)
         val all = ao.notes + ao.unresolved + listOfNotNull(reqNote) + probs
+        gate()
         pendingProject = p
         update { copy(problems = all, working = false, readyToApply = true, status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "Ready — voice-over preserved, ${m.scenes.size} scenes")) }
         say("Built ${m.scenes.size} scenes around your original voice-over (unchanged)." + (if (all.isNotEmpty()) "\n\nNotes:\n" + all.take(8).joinToString("\n") { "• $it" } else "") + "\n\nTap “Add to timeline”.")
@@ -418,15 +480,15 @@ class DirectorController(
             footageNarration = emptyList()
             val made = mutableListOf<Triple<Long, String, Pair<Long, String>>>()
             val dir = File(appContext.filesDir, "director_audio/footage")
-            segs.forEachIndexed { i, (at, maxMs, text) ->
+            try { segs.forEachIndexed { i, (at, maxMs, text) ->
+                currentCoroutineContext().ensureActive()
                 status(DirectorStage.GENERATING_NARRATION, "Generating narration", i.toFloat() / segs.size, "${i + 1}/${segs.size}")
                 val tl = TimelineAssembler.sourceToTimelineMs(plan.keep, at) ?: return@forEachIndexed
                 DeviceSpeech.synthesize(appContext, text, b.narrationLanguage, b.pace, dir, "n$i").fold({ c ->
                     if (c.durationMs > maxMs + 400) probsLocal += "Narration at ${at / 1000}s is ${c.durationMs - maxMs} ms longer than its window; shorten that line or allow a longer cut."
                     made += Triple(tl, "file://${c.file.absolutePath}", c.durationMs to text)
                 }, { probsLocal += "Narration at ${at / 1000}s failed: ${it.message}" })
-            }
-            DeviceSpeech.release()
+            } } finally { DeviceSpeech.release() }
             if (made.isEmpty()) { fail("No narration audio could be generated. " + probsLocal.lastOrNull().orEmpty()); return }
             footageNarration = made.map { Triple(it.first, it.third.first, it.third.second + "\u0000" + it.second) }
         }
@@ -446,6 +508,7 @@ class DirectorController(
         }
         if (workflow == DirectorWorkflow.VIDEO_TO_EDITING && p.items.any { it.trackType == com.example.studio.model.TrackType.VOICE && it.origin == "ai" })
             error("Internal guard: VIDEO TO EDITING must not contain generated narration")
+        gate()
         pendingProject = p
         val all = probsLocal + probs.filterNot { it.startsWith("Scene footage") }
         update { copy(problems = all, working = false, readyToApply = true, status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "Edit ready — ${plan.keep.size} segments")) }
@@ -498,7 +561,7 @@ class DirectorController(
             val before = assets.size
             assets = ao.assets
             val reqNote = requestNeeds(b, m, ao)
-            sfxLib = runCatching { services.resolveSfxLibrary(m, "default") }.getOrDefault(emptyMap())
+            sfxLib = cancellableResult { services.resolveSfxLibrary(m, "default") }.getOrDefault(emptyMap())
             store.saveArtifacts(projectId, workflow, narrationClips, assets)
             val (p, probs) = TimelineAssembler.assemble(getProject(), m, narrationClips, assets, captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
                 sfx = SfxFiles.render(appContext, m, library = { kind -> sfxLibrary(kind) }), captionStyle = BrandKit.captionStyle(appContext))
@@ -515,7 +578,14 @@ class DirectorController(
 
     fun applyToTimeline() {
         val p = pendingProject ?: run { say("Nothing to apply yet.", error = true); return }
-        applyProject(p); pendingProject = null
+        val event = activityBus.begin(ActivityKind.TIMELINE, "Adding to timeline")
+        try {
+            applyProject(p); pendingProject = null
+            activityBus.finish(event)
+        } catch (e: Exception) {
+            activityBus.finish(event, ActivityState.FAILED, "Could not apply the project")
+            throw e
+        }
         update { copy(applied = true, readyToApply = false) }
         say("Added to your timeline. Press Play in the editor to preview. You can reopen this chat any time to revise scenes.")
     }
@@ -667,9 +737,13 @@ class DirectorController(
                     val others = m.scenes.filter { it.id != target.id }.mapNotNull { it.graph }
                     val collision = fixed?.let { SceneUniqueness.reason(it, others, num - 1) }
                     if (fixed != null && fatal.isNullOrEmpty() && lint.isNullOrEmpty() && layout.isNullOrEmpty() && collision == null) {
-                        chosen = fixed; break
+                        chosen = fixed
+                        activityBus.instant(ActivityKind.SCENE_JSON, "Scene $num revision accepted", "Passed validation and uniqueness checks.")
+                        break
                     }
-                    feedback = "\nYour previous design was rejected: " + (collision ?: fatal?.firstOrNull()?.message ?: lint?.firstOrNull() ?: layout?.firstOrNull() ?: "invalid JSON") + ". Replan a unique, valid layout."
+                    val reason = collision ?: fatal?.firstOrNull()?.message ?: lint?.firstOrNull() ?: layout?.firstOrNull() ?: "invalid JSON"
+                    activityBus.instant(ActivityKind.SCENE_JSON, "Scene $num revision rejected", reason)
+                    feedback = "\nYour previous design was rejected: $reason. Replan a unique, valid layout."
                 }
                 if (chosen == null) { failed += "scene $num"; return@forEachIndexed }
                 val revised = target.copy(graph = chosen)

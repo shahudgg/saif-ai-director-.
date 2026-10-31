@@ -48,7 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,22 +75,15 @@ private val Bg = Color(0xFF09080E); private val Glass = Color(0xFF17131F); priva
 
 @Composable
 fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
-    val ui by controller.ui.collectAsState()
+    val ui by controller.ui.collectAsStateWithLifecycle()
+    val activity by controller.activity.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
     val wf = controller.workflow
     var input by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     BackHandler(onBack = onClose)
-    // Live production log: every real stage the job passes through, newest last.
-    val activity = remember { androidx.compose.runtime.mutableStateListOf<String>() }
-    LaunchedEffect(ui.status?.label, ui.status?.detail) {
-        ui.status?.let { st ->
-            val line = st.label + if (st.detail.isNotBlank()) " (${st.detail})" else ""
-            if (activity.lastOrNull() != line) { activity.add(line); if (activity.size > 40) activity.removeAt(0) }
-        }
-    }
-    LaunchedEffect(ui.turns.size, ui.status) { if (ui.turns.isNotEmpty()) listState.animateScrollToItem(ui.turns.size) }
+    LaunchedEffect(ui.turns.size) { if (ui.turns.isNotEmpty()) listState.animateScrollToItem(ui.turns.size) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
@@ -119,16 +112,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                 val st = ui.status
                 if (st != null) StatusPanel(st.label, st.detail, st.fraction, st.failed, ui.working, ui.paused,
                     onPause = { controller.setPaused(!ui.paused) }, onCancel = controller::cancel)
-                if (activity.size > 1) Surface(shape = RoundedCornerShape(12.dp), color = Glass, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("Production activity", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        val shown = activity.takeLast(6)
-                        shown.forEachIndexed { i, line ->
-                            val last = i == shown.lastIndex && ui.working
-                            Text((if (last) "● " else "✓ ") + line, color = if (last) Color.White else Color(0xFF9E95AC), fontSize = 10.sp)
-                        }
-                    }
-                }
+                AgentActivityPanel(activity)
                 if (ui.sources.isNotEmpty()) Surface(shape = RoundedCornerShape(12.dp), color = Glass, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                     Column(Modifier.padding(10.dp)) {
                         Text("Sources (${ui.sources.size})", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)

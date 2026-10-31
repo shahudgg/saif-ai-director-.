@@ -34,10 +34,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -47,52 +45,31 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.studio.ai.AiClient
-import com.example.studio.ai.AiProfile
-import com.example.studio.model.ItemEffects
-import com.example.studio.model.ItemTransform
-import com.example.studio.model.TrackType
-import com.example.studio.model.VideoItem
-import com.example.studio.state.StudioAction
 import com.example.studio.state.StudioViewModel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import java.util.UUID
 
 @Composable
 fun StudioAiVideoModal(
     viewModel: StudioViewModel,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val aiProfile = remember { AiProfile.fromSettings(context) }
-    val activeLaneId = remember {
-        viewModel.uiState.value.project.lanes.firstOrNull { it.trackType == TrackType.VIDEO }?.id ?: "lane_video_1"
-    }
 
     var promptText by remember { mutableStateOf("Cyberpunk rainy night in Neo-Tokyo with flying hovercars and glowing neon reflections") }
     var selectedStyle by remember { mutableStateOf("Cyberpunk Sci-Fi") }
     var selectedDurationSec by remember { mutableFloatStateOf(5.0f) }
     var selectedCameraMotion by remember { mutableStateOf("Slow Drone Push") }
 
-    var isGenerating by remember { mutableStateOf(false) }
-    var generationProgress by remember { mutableFloatStateOf(0f) }
-    var generationPhase by remember { mutableStateOf("Idle") }
-    var generatedItem by remember { mutableStateOf<VideoItem?>(null) }
 
     val styles = listOf(
         "Cyberpunk Sci-Fi",
@@ -130,7 +107,7 @@ fun StudioAiVideoModal(
     )
 
     Dialog(
-        onDismissRequest = { if (!isGenerating) onDismiss() },
+        onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Box(
@@ -176,7 +153,7 @@ fun StudioAiVideoModal(
                             Column {
                                 Text("AI Video Scene Generator", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = "Provider: ${aiProfile.provider} (${aiProfile.activeModel})",
+                                    text = "Style preview • no video generator connected",
                                     color = Color(0xFF00E5FF),
                                     fontSize = 11.sp
                                 )
@@ -184,7 +161,7 @@ fun StudioAiVideoModal(
                         }
 
                         IconButton(
-                            onClick = { if (!isGenerating) onDismiss() },
+                            onClick = onDismiss,
                             modifier = Modifier.size(28.dp)
                         ) {
                             Icon(Icons.Default.Close, contentDescription = "Close", tint = Color(0xFFCCC3D9))
@@ -313,118 +290,10 @@ fun StudioAiVideoModal(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Preview Canvas / Progress
-                    if (isGenerating) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(90.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF09080F)),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            CircularProgressIndicator(color = Color(0xFF00E5FF), modifier = Modifier.size(24.dp))
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(generationPhase, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            LinearProgressIndicator(
-                                progress = { generationProgress },
-                                modifier = Modifier.fillMaxWidth(0.7f).height(4.dp),
-                                color = Color(0xFF00E5FF),
-                                trackColor = Color(0xFF1E1A2C)
-                            )
-                        }
-                    } else if (generatedItem != null) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF09080F),
-                            border = BorderStroke(1.dp, Color(0xFF10B981)),
-                            modifier = Modifier.fillMaxWidth().height(80.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Videocam, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(28.dp))
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text(generatedItem!!.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                        Text("${selectedDurationSec}s • $selectedStyle", color = Color(0xFF34D399), fontSize = 11.sp)
-                                    }
-                                }
-
-                                Button(
-                                    onClick = {
-                                        viewModel.commit(StudioAction.AddItem(generatedItem!!))
-                                        viewModel.selectItem(generatedItem!!.id)
-                                        onDismiss()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Text("Add to Track", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Generate Button
-                    Button(
-                        onClick = {
-                            isGenerating = true
-                            generationProgress = 0.1f
-                            generationPhase = "Contacting ${aiProfile.provider} Neural Engine..."
-
-                            scope.launch {
-                                delay(400)
-                                generationProgress = 0.4f
-                                generationPhase = "Synthesizing visual layers & motion vectors..."
-                                delay(600)
-                                generationProgress = 0.8f
-                                generationPhase = "Finalizing $selectedStyle scene rendering..."
-                                delay(400)
-
-                                val currentPlayheadUs = viewModel.clock.currentTimeUs.value
-                                val durationUs = (selectedDurationSec * 1_000_000L).toLong()
-
-                                val newItem = VideoItem(
-                                    id = "ai_clip_${UUID.randomUUID().toString().take(8)}",
-                                    laneId = activeLaneId,
-                                    startUs = currentPlayheadUs,
-                                    durationUs = durationUs,
-                                    mediaUri = "", // Procedural AI stream
-                                    label = "AI: ${selectedStyle.take(12)}",
-                                    origin = "ai_generator",
-                                    aiWhy = "$selectedStyle clip: $promptText",
-                                    effects = ItemEffects(
-                                        contrast = 1.15f,
-                                        saturation = 1.2f
-                                    ),
-                                    transform = ItemTransform(scale = 1.0f)
-                                )
-
-                                isGenerating = false
-                                generatedItem = newItem
-                            }
-                        },
-                        enabled = !isGenerating && promptText.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color.Black)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (isGenerating) "Generating Scene..." else "Generate AI Video Scene",
-                            color = Color.Black,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                    Text("This panel is a style preview only. It is not connected to a video generator and will not create a clip. Use SAIF Director to build a Canvas-based video.",
+                        color = Color(0xFFCCC3D9), fontSize = 11.sp, modifier = Modifier.padding(vertical = 12.dp))
+                    Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                        Text("Video generation unavailable here")
                     }
                 }
             }

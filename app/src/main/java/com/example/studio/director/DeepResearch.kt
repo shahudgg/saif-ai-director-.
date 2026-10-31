@@ -168,7 +168,7 @@ object DeepResearch {
     ): ResearchOutcome = coroutineScope {
         val year = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
         onStep("Planning search angles")
-        val planned = if (ask != null) runCatching { planQueries(topic, year, ask) }.getOrDefault(emptyList()) else emptyList()
+        val planned = if (ask != null) cancellableResult { planQueries(topic, year, ask) }.getOrDefault(emptyList()) else emptyList()
         val queries = planned.ifEmpty { ResearchText.fallbackQueries(topic, year) }.take(5)
         // Topic words come from the user's topic AND the (English) planned queries, so Hinglish topics still match English pages.
         val topicWords = (com.example.studio.composer.LocalBeatAnalyzer.keywords(topic, 8) + queries.flatMap { com.example.studio.composer.LocalBeatAnalyzer.keywords(it, 4) })

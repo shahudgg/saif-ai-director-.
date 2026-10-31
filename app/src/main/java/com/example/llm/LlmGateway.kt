@@ -48,7 +48,21 @@ object LlmGateway {
         onChunk: suspend (String) -> Unit = {},
         onWaiting: (suspend (reason: String, secondsRemaining: Int) -> Unit)? = null,
         onThinking: (suspend (thoughtChunk: String) -> Unit)? = null
+    ): Result<LlmResponse> = callObserved(role, provider, apiKey, model, request, onChunk, onWaiting, onThinking, null)
+
+    /** Same gateway and retries as [call], with an explicit callback for every HTTP/model attempt. */
+    suspend fun callObserved(
+        role: LlmRole,
+        provider: String,
+        apiKey: String,
+        model: String,
+        request: LlmRequest,
+        onChunk: suspend (String) -> Unit = {},
+        onWaiting: (suspend (reason: String, secondsRemaining: Int) -> Unit)? = null,
+        onThinking: (suspend (thoughtChunk: String) -> Unit)? = null,
+        onAttemptStart: (suspend (attempt: Int, model: String) -> Unit)? = null
     ): Result<LlmResponse> {
+        var attempts = 0
         val cleanKey = KeyStoreCrypto.decrypt(apiKey).trim()
             .removeSurrounding("\"").removeSurrounding("'").removePrefix("Bearer ").removePrefix("bearer ").trim()
 
@@ -104,13 +118,17 @@ object LlmGateway {
 
             val callReq = currentRequest.copy(maxTokens = allocatedOutput)
 
-            val result = LlmClient.streamDetailed(
+            val result = LlmClient.streamDetailedObserved(
                 providerName = if (profile.id == "Custom") provider else profile.id,
                 apiKey = cleanKey,
                 modelName = activeModel,
                 request = callReq,
                 onChunk = onChunk,
-                onThinking = onThinking
+                onThinking = onThinking,
+                onAttemptStart = { actualModel ->
+                    attempts++
+                    onAttemptStart?.invoke(attempts, actualModel)
+                }
             )
 
             if (result.isSuccess) {
