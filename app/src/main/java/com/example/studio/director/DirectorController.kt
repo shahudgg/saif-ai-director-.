@@ -740,6 +740,46 @@ class DirectorController(
         } }
     }
 
+    /**
+     * Round 12 — Flow autopilot placement: Flow se generate ki gayi images ko current plan ke scenes pe
+     * IN ORDER fix karta hai (scene 1 → pehli image, …) as full-frame backdrops; code animations unke upar
+     * play hongi. Agar plan abhi nahi bana to images library mein rehte hain aur agle run mein hunter unhe
+     * keyword match karke khud place kar dega.
+     */
+    fun attachFlowImages() {
+        val m = _ui.value.manifest ?: run { say("Pehle ek plan banao (🤖 SAIF Agent ya Confirm & start). Flow images abhi sirf library mein add hue hain — agle run mein khud aa jayenge.", error = true); return }
+        if (_ui.value.working) return
+        job = scope.launch { guarded {
+            status(DirectorStage.CHECKING_ASSETS, "Flow images ko sahi scene pe fix kar raha hoon")
+            val imgs = com.example.ui.components.FlowAssetStore.items(appContext).filter { it.type == "image" }.sortedBy { it.messageId }
+            if (imgs.isEmpty()) { say("Flow library khali hai — pehle 🌐 browser se images generate karo.", error = true); return@guarded }
+            val entrances = listOf("fadeIn", "slideUp", "zoom", "popIn", "wipe")
+            val add = m.scenes.mapIndexedNotNull { i, sc ->
+                val a = imgs.getOrNull(i) ?: return@mapIndexedNotNull null
+                ResolvedAsset(sceneId = sc.id, requestId = "flow-" + a.assetId, kind = "image",
+                    localPath = a.fileId.removePrefix("local:"),
+                    source = "flow-ai:" + a.title,
+                    verified = true, note = "Flow AI image: " + a.title.take(90),
+                    ext = a.extension.ifBlank { "png" },
+                    placement = AssetPlacements.clamp(AssetPlacement(role = "backdrop", width = 1f, height = 1f, fit = "cover",
+                        drift = if (i % 2 == 0) 0.25f else -0.25f, animIn = entrances[i % entrances.size], animInMs = 350L,
+                        glow = 0.08f, glowColor = "#8B5CF6")))
+            }
+            val replaced = add.map { it.sceneId }.toSet()
+            assets = assets.filterNot { it.sceneId in replaced && it.kind != "audio" } + add
+            val b = _ui.value.brief
+            store.saveArtifacts(projectId, workflow, narrationClips, assets)
+            val (assembled, probs) = TimelineAssembler.assemble(getProject(), m, narrationClips, assets, captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
+                sfx = SfxFiles.render(appContext, m, library = { kind -> sfxLibrary(kind) }), captionStyle = BrandKit.captionStyle(appContext))
+            val (p, musicNotes) = if (workflow == DirectorWorkflow.ZERO_TO_VIDEO) attachCheckedMusic(assembled, m, b) else assembled to emptyList()
+            gate()
+            pendingProject = p
+            update { copy(problems = probs + musicNotes, working = false, readyToApply = true,
+                status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "Flow images lag gaye — " + add.size + "/" + m.scenes.size + " scenes")) }
+            say("✅ " + add.size + " Flow image(s) ko scenes pe fix kar diya (order mein, scene 1 se). Code animations inke upar play hongi. “Add to timeline” dabao.")
+        } }
+    }
+
     // ---------------- apply / revise ----------------
 
     private var pendingProject: StudioProject? = null

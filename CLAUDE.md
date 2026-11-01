@@ -115,6 +115,13 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
+**Round 12 (this ZIP)** — the reference video's Flow-autopilot flow, fully inside SAIF AI (no Antigravity, no Termux — everything native): one-time Flow login in-app, agent-driven bulk image generation with 8 s gaps, auto-download into the asset library, and one-tap placement of Flow images onto the planned scenes.
+
+- `ui/components/FlowAiStudio.kt`: new `AUTO_JS` driver injected into the persistent WebView — `window.SaifFlowAuto.queue(prompts)` fills the Flow prompt box, clicks generate, waits 8 s per prompt, reports progress via the bridge; `FlowBatchDialog(topic, aspect, style, onDone)` builds N prompts via the model (`DirectorServices.flowImagePrompts`) and auto-queues them; every generated image is auto-imported by the existing collector (`FlowAssetStore`). Bulk "🪄 Sabka bg-remove" added to the asset tools (runs `ImageGen.edit` per image, max 12).
+- `SaifDirectorScreen`: one-time setup banner on zero-to-video ("1️⃣ Google Flow mein login karo" → `FlowAiBrowserDialog`), and a "🖼 Flow images" action button → `FlowBatchDialog` → `onDone` calls `DirectorController.attachFlowImages()`.
+- `DirectorController.attachFlowImages()`: places Flow images on the current plan IN ORDER (scene 1 → first image, …) as full-frame backdrops with alternating entrance/drift (fadeIn/slideUp/zoom/popIn/wipe, drift ±0.25) — code animations play on top; without a plan the images stay in the library and the keyword hunter picks them up on the next run (they are merged into `loadMasterCatalog`).
+- CI: green at run 41292957218 (commit 27112b0); APK on release tag `saif-ai-apk`.
+
 **Round 11 (this ZIP)** — (A) build pushed to GitHub and CI (`build-apk.yml`) compiles the APK, (B) SAIF AGENT autopilot inside the app, (C) any-API power: key rotation + model fallback everywhere, (D) Flow-video parity without Antigravity: Flow browser assets → crop/AI-edit/bg-remove → director pipeline.
 
 *A. SAIF Agent autopilot (zero-to-video)*

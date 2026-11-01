@@ -87,6 +87,8 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
     var showAgent by remember { mutableStateOf(false) }
+    var showFlowSetup by remember { mutableStateOf(false) }
+    var showBatch by remember { mutableStateOf(false) }
     var checkingMusic by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scrollScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -125,6 +127,20 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                 }
                 if (wf == DirectorWorkflow.ZERO_TO_VIDEO) TextButton(onClick = { scrollScope.launch { listState.animateScrollToItem(0) } }) { Text("Brief", color = Cyan, fontSize = 11.sp) }
                 IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Research, asset sources & Flow AI", tint = Color(0xFFCCC3D9)) }
+            }
+        }
+
+        // Round 12 — one-time Flow setup banner (the video's "browser button" at the top of zero-to-video)
+        if (wf == DirectorWorkflow.ZERO_TO_VIDEO && com.example.ui.components.FlowAssetStore.count(ctx) == 0) {
+            Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp), shape = RoundedCornerShape(12.dp), color = Color(0xFF1D1430), border = BorderStroke(1.dp, Color(0x557B2BFF))) {
+                Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("1️⃣", fontSize = 16.sp)
+                    Column(Modifier.weight(1f)) {
+                        Text("One-time setup: Google Flow mein login karo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Browser kholo, flow.google.com pe Gmail se login karo — baad mein SAIF Agent wahin se topic ke liye saari images 8-8 second ke gap mein bana lega aur yahin download karega.", color = Color(0xFF9E95AC), fontSize = 10.sp, lineHeight = 13.sp)
+                    }
+                    OutlinedButton(onClick = { showFlowSetup = true }) { Text("Open browser", fontSize = 10.sp) }
+                }
             }
         }
 
@@ -175,6 +191,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showBatch = true }) { Text("🖼 Flow images") }
             if (ui.awaitingBriefConfirm && !ui.working) Button(enabled = !checkingMusic, onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
             if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(enabled = !checkingMusic, onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
             if (ui.readyToApply && !ui.working) Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
@@ -206,6 +223,11 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
     }
     if (showSettings) KeysDialog(onDismiss = { showSettings = false })
     if (showAgent) AgentDialog(onDismiss = { showAgent = false }, onRun = { goal -> showAgent = false; controller.agentRun(goal) })
+    if (showFlowSetup) com.example.ui.components.FlowAiBrowserDialog(onDismiss = { showFlowSetup = false })
+    if (showBatch) com.example.ui.components.FlowBatchDialog(
+        topic = ui.brief.prompt.ifBlank { input }.ifBlank { "short explainer video" },
+        aspect = ui.brief.aspect ?: "9:16", style = ui.brief.style ?: "",
+        onDismiss = { showBatch = false }, onDone = { controller.attachFlowImages() })
 }
 
 @OptIn(ExperimentalLayoutApi::class)

@@ -188,6 +188,23 @@ class DirectorServices(private val context: Context, private val activity: Agent
         AgentDecision(brief, script)
     }
 
+    /** Round 12 — Flow autopilot: N distinct English image prompts for a topic (one per scene), strict JSON array. */
+    suspend fun flowImagePrompts(topic: String, n: Int, aspect: String?, style: String?): Result<List<String>> {
+        val prompt = buildString {
+            appendLine("You are the SAIF AGENT inside SAIF AI. Topic for a short video: " + topic.take(200) + ".")
+            appendLine("Write " + n + " DISTINCT, detailed ENGLISH image-generation prompts (one per scene), aspect " + (aspect ?: "9:16") + ", style " + (style ?: "cinematic explainer") + ".")
+            appendLine("Each prompt must name: subject, action, setting, lighting, camera angle and lens, colour mood. Every image must look DIFFERENT from the others. No text, watermarks or logos in the images.")
+            appendLine("""{"prompts":["prompt 1","prompt 2","prompt 3"]}""")
+            appendLine("Reply with STRICT JSON only — no markdown fences, no commentary.")
+        }
+        return llm(prompt, role = LlmRole.PLANNER, system = "You are the SAIF AGENT. Reply with JSON only.", maxTokens = 4000,
+            traceKind = ActivityKind.SCRIPT, traceTitle = "Flow image prompts").map { raw ->
+            val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            val arr = JSONObject(cleaned).optJSONArray("prompts") ?: throw IllegalStateException("The agent returned no prompt list: " + raw.take(100))
+            (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.length > 10 }.take(n)
+        }
+    }
+
     /** A stronger opening line than [current], or a failure explaining why nothing changed. */
     suspend fun betterHook(b: DirectorBrief, current: String): Result<String> {
         val pipeline = ScriptPipeline(ask = { p -> llm(p, maxTokens = 600, traceKind = ActivityKind.SCRIPT, traceTitle = "Hook options") }, guard = { ModelOutputGuard.reason(it, b.narrationLanguage) })
