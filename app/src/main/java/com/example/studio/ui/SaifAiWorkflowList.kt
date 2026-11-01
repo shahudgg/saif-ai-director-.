@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.item
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -60,7 +59,7 @@ fun SaifModeSwitch(aiMode: Boolean, onChange: (Boolean) -> Unit) {
 @Composable
 fun SaifAiWorkflowList(onOpenWorkflow: (DirectorWorkflow) -> Unit) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
+        items(listOf("__header__")) {
             Text("SAIF AI DIRECTOR", color = Color(0xFFD9C6FF), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.2.sp, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
             Text("Script se lekar AI images, animation, narration aur timeline tak — sab yahin hota hai, live progress ke saath.",
                 color = Color(0xFF9E95AC), fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 4.dp))
