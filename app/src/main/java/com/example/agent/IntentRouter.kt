@@ -156,7 +156,7 @@ object IntentRouter {
 
         // Round 13: "video banao <topic>" / "make a video …" from the floating AI → the phone agent
         // (full app access) opens the SAIF AI studio and runs the SAIF Agent crew with the goal.
-        if (VIDEO_INTENT_REGEX.containsMatchIn(clean)) {
+        if (VIDEO_INTENT_REGEX.containsMatchIn(lower)) {
             return RouteDecision(RouteDestination.TASK,
                 "In the SAIF AI app, open the AI Studio / video studio (zero-to-video), tap the 🤖 SAIF Agent button, and enter this goal exactly: " + utterance)
         }

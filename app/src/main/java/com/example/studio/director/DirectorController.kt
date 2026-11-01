@@ -475,7 +475,7 @@ class DirectorController(
                 fallbackNote = "Model brief nahi de paya — default brief (60s, 9:16) use hoga.") {
                 services.agentDecide(goal, _ui.value.brief)
             }.getOrElse {
-                Result.success(AgentDecision(_ui.value.brief.copy(prompt = goal, durationSec = _ui.value.brief.durationSec ?: 60, aspect = _ui.value.brief.aspect ?: "9:16"), ""))
+                AgentDecision(_ui.value.brief.copy(prompt = goal, durationSec = _ui.value.brief.durationSec ?: 60, aspect = _ui.value.brief.aspect ?: "9:16"), "")
             }
             update { withBrief(dec.brief) }
             gate()
