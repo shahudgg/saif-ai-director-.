@@ -456,6 +456,43 @@ class DirectorController(
         job = scope.launch { guarded { produceFromScript(_ui.value.script) } }
     }
 
+    /**
+     * Round 11 — SAIF AGENT autopilot. One goal in, a finished video out: the agent decides the brief,
+     * researches, writes the script, plans unique scenes, generates one AI key visual per scene, narrates,
+     * hunts assets, builds the timeline and applies it — every step streamed live in the chat.
+     */
+    fun agentRun(goal: String) {
+        if (_ui.value.working || goal.isBlank()) return
+        if (workflow != DirectorWorkflow.ZERO_TO_VIDEO) { say("The SAIF Agent runs the Zero-to-video workflow — open that first.", error = true); return }
+        update { copy(working = true, problems = emptyList(), awaitingBriefConfirm = false) }
+        job = scope.launch { guarded {
+            say("🤖 SAIF Agent took over: \"${goal.take(120)}\". Research → script → plan → AI key visuals → narration → assets → timeline — all automatic, every scene unique.")
+            status(DirectorStage.RESEARCHING, "SAIF Agent deciding the brief", detail = goal.take(80))
+            val dec = services.agentDecide(goal, _ui.value.brief).getOrElse { fail("Agent planning failed: ${it.message}"); return@guarded }
+            update { withBrief(dec.brief) }
+            gate()
+            val b = _ui.value.brief
+            status(DirectorStage.RESEARCHING, "SAIF Agent researching the topic")
+            val r = services.research(b) { step -> status(DirectorStage.RESEARCHING, "SAIF Agent researching the topic", detail = step) }
+            gate()
+            update { copy(sources = r.sources) }
+            var script = dec.script
+            if (script.isBlank()) {
+                status(DirectorStage.WRITING_SCRIPT, "SAIF Agent writing the script")
+                script = services.writeScript(b, r.digest).getOrElse { fail("Script writing failed: ${it.message}"); return@guarded }
+            }
+            gate()
+            update { copy(script = script, scriptApproved = true) }
+            say("🤖 Brief + script ready (${SpeechTiming.countWords(script)} words, ${b.durationSec ?: 60}s, ${b.aspect ?: "9:16"}). Producing the video now…")
+            produceFromScript(script)
+            gate()
+            if (_ui.value.readyToApply) {
+                applyToTimeline()
+                say("✅ SAIF Agent finished — the video is on your timeline. Open the editor and tap Export for the MP4.")
+            }
+        } }
+    }
+
     private fun reviseScript(instruction: String) {
         job = scope.launch { guarded {
             status(DirectorStage.WRITING_SCRIPT, "Revising the script")

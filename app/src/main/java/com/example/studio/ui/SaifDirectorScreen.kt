@@ -85,6 +85,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
     val wf = controller.workflow
     var input by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var showAgent by remember { mutableStateOf(false) }
     var checkingMusic by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scrollScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -172,6 +173,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
             if (ui.awaitingBriefConfirm && !ui.working) Button(enabled = !checkingMusic, onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
             if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(enabled = !checkingMusic, onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
             if (ui.readyToApply && !ui.working) Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
@@ -202,6 +204,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
         }
     }
     if (showSettings) KeysDialog(onDismiss = { showSettings = false })
+    if (showAgent) AgentDialog(onDismiss = { showAgent = false }, onRun = { goal -> showAgent = false; controller.agentRun(goal) })
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -270,6 +273,20 @@ private fun StatusPanel(label: String, detail: String, fraction: Float?, failed:
             }
         }
     }
+}
+
+/** Round 11 — SAIF Agent autopilot entry: one goal, the agent does everything (research → video → timeline). */
+@Composable
+private fun AgentDialog(onDismiss: () -> Unit, onRun: (String) -> Unit) {
+    var goal by remember { mutableStateOf("") }
+    AlertDialog(onDismissRequest = onDismiss,
+        title = { Text("🤖 SAIF Agent — autopilot") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("One goal likho — agent khud research, script, plan, AI images, narration, assets aur timeline bana kar apply kar dega. Har scene unique banegi, live progress chat mein dikhega.", fontSize = 11.sp)
+            OutlinedTextField(goal, { goal = it }, label = { Text("e.g. 60-second Hinglish video on how UPI works") }, maxLines = 4)
+        } },
+        confirmButton = { TextButton(enabled = goal.isNotBlank(), onClick = { onRun(goal.trim()) }) { Text("Run agent") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
 
 @Composable

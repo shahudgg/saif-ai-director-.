@@ -16,7 +16,9 @@ data class ProviderEntry(
     val capabilities: Set<Capability>,
     val maxInlineImageBytes: Long = 4L * 1024 * 1024,
     val maxAudioBytes: Long = 24L * 1024 * 1024,
-    val isLocalDevice: Boolean = false
+    val isLocalDevice: Boolean = false,
+    /** Round 11: the concrete key this entry should use (empty = take the profile default). Enables per-key rotation. */
+    val apiKey: String = ""
 ) {
     fun supports(c: Capability) = hasCredentials && c in capabilities || (isLocalDevice && c in capabilities)
 }

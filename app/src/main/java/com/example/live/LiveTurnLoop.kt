@@ -303,17 +303,28 @@ class LiveTurnLoop(
             maxTokens = 400
         )
         val streamed = StringBuilder()
-        val result = LlmGateway.call(
-            role = LlmRole.SUMMARIZER, provider = settings.providerName, apiKey = key,
-            model = settings.activeModel, request = request,
-            onChunk = { chunk ->
-                if (isCurrent(token)) {
-                    streamed.append(chunk)
-                    _assistantTranscript.value = streamed.toString()
-                    listener.onAssistantTranscript(_assistantTranscript.value)
+        // Round 11: any-API power — if the current key is out of quota or rejected, rotate to the next saved key
+        // (up to 3) instead of failing the turn. Works for every provider, including cheap/low-quota keys.
+        val keysToTry = (listOf(key) + settings.apiKeys.filter { it.isNotBlank() && it != key }).distinct().take(3)
+        var result: Result<com.example.llm.LlmResponse> = Result.failure(IllegalStateException("no API key"))
+        for (k in keysToTry) {
+            currentCoroutineContext().ensureActive()
+            if (!isCurrent(token)) return
+            result = LlmGateway.call(
+                role = LlmRole.SUMMARIZER, provider = settings.providerName, apiKey = k,
+                model = settings.activeModel, request = request,
+                onChunk = { chunk ->
+                    if (isCurrent(token)) {
+                        streamed.append(chunk)
+                        _assistantTranscript.value = streamed.toString()
+                        listener.onAssistantTranscript(_assistantTranscript.value)
+                    }
                 }
-            }
-        )
+            )
+            if (result.isSuccess) break
+            val kind = com.example.studio.director.ProviderRegistry.classifyFailure(result.exceptionOrNull()?.message)
+            if (kind != com.example.studio.director.FailureKind.QUOTA && kind != com.example.studio.director.FailureKind.AUTH) break
+        }
         currentCoroutineContext().ensureActive()
         if (!isCurrent(token)) return
         val response = result.getOrElse {

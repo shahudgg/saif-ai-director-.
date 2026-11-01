@@ -115,6 +115,19 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
+**Round 11 (this ZIP)** — (A) build pushed to GitHub and CI (`build-apk.yml`) compiles the APK, (B) SAIF AGENT autopilot inside the app, (C) any-API power: key rotation + model fallback everywhere, (D) Flow-video parity without Antigravity: Flow browser assets → crop/AI-edit/bg-remove → director pipeline.
+
+*A. SAIF Agent autopilot (zero-to-video)*
+- `DirectorServices.agentDecide(goal, brief)`: the model decides the ENTIRE brief (language, duration, aspect, style, voice, pace, subtitles, asset policy) + drafts the script; strict-JSON, defensively parsed.
+- `DirectorController.agentRun(goal)`: research → script → `produceFromScript` (plan, per-scene AI key visuals, narration, asset hunt) → auto `applyToTimeline()`. Entry: "🤖 SAIF Agent" button in the zero-to-video action bar + `AgentDialog`. Every step streams live via the existing activity panel.
+
+*B. Any-API power / low-quota keys*
+- `ProviderEntry` gained `apiKey`; `DirectorServices.providers()` now emits one chain entry PER saved key (plus the provider's `defaultFallbackModels` on the first key), and `llm()` calls through that entry — so quota/auth on one key rotates to the next automatically (`ProviderRegistry.runWithFallback`).
+- `LiveTurnLoop` (non-Gemini host loop) rotates through up to 3 saved keys on QUOTA/AUTH instead of failing the turn.
+- Image gen (`ImageGen`) already works with gemini/openai/openrouter/custom keys; Flow-imported `local:` assets join the Telegram library (`FlowAssetStore` + `downloadCandidate` special-case).
+
+*C. CI* — branch `arena/...` pushes trigger `build-apk.yml` (push on `arena/**`); APK artifact `app-debug`, compile errors are also pushed to the `ci-errors` branch. Round 10 commit's run was triggered automatically on push.
+
 **Round 10 (this ZIP)** — four asks: (A) purple mic Normal/Screen-share works with ANY provider key, (B) zero-to-video = unique scenes + one AI image per scene + live progress, (C) Telegram "empty" bug fixed for good, (D) in-app Flow AI browser + AI asset tools. All SAIF AI automation / Tech GPTx / TAMCL credits removed; everything is branded SAIF AI.
 
 *A. Any-key live modes*

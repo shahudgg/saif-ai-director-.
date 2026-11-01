@@ -28,6 +28,9 @@ import java.io.File
 data class ResearchOutcome(val digest: String?, val sources: List<ResearchSource>, val note: String)
 data class NarrationOutcome(val clips: List<NarrationClip>, val manifest: SceneManifest, val failures: List<String>)
 data class AssetOutcome(val assets: List<ResolvedAsset>, val unresolved: List<String>, val notes: List<String>, val needs: List<AssetNeed> = emptyList())
+
+/** Round 11 — SAIF AGENT autopilot decision: a complete brief plus an optional draft script. */
+data class AgentDecision(val brief: DirectorBrief, val script: String)
 data class FootagePlan(val summary: String, val keep: List<FootageRange>, val overlays: List<Triple<Long, Long, String>>, val captions: Boolean, val usedAi: Boolean)
 
 /** All real work behind the four workflows. Every method reports failure honestly instead of faking output. */
@@ -35,8 +38,22 @@ class DirectorServices(private val context: Context, private val activity: Agent
 
     fun providers(): List<ProviderEntry> {
         val prof = AiProfile.fromSettings(context)
-        val chat = ProviderRegistry.fromProfile(ProviderProfile.getById(prof.provider), prof.apiKey.isNotBlank(), prof.activeModel)
-        return listOf(chat, ProviderRegistry.deviceSpeech(), ProviderRegistry.webSearch(WebResearch.isConfigured(context), WebResearch.provider(context)))
+        val profile = ProviderProfile.getById(prof.provider)
+        // Round 11: one chain entry per saved key (so quota/auth on one key rotates to the next),
+        // plus the provider's own fallback models on the first key.
+        val keys = runCatching {
+            com.example.data.local.ProviderSettingsManager.init(context)
+            com.example.data.local.ProviderSettingsManager.loadState().apiKeys.filter { it.isNotBlank() }
+        }.getOrDefault(listOf(prof.apiKey).filter { it.isNotBlank() })
+        val models = (listOf(prof.activeModel) + profile.defaultFallbackModels).distinct()
+        val chatEntries = when {
+            keys.isEmpty() -> listOf(ProviderRegistry.fromProfile(profile, false, prof.activeModel))
+            else -> keys.flatMapIndexed { ki, k ->
+                val ms = if (ki == 0) models else listOf(prof.activeModel)
+                ms.map { m -> ProviderRegistry.fromProfile(profile, true, m).copy(apiKey = k) }
+            }
+        }
+        return chatEntries + listOf(ProviderRegistry.deviceSpeech(), ProviderRegistry.webSearch(WebResearch.isConfigured(context), WebResearch.provider(context)))
     }
 
     fun can(c: Capability) = ProviderRegistry.route(providers(), c) is RouteResult.Routed
@@ -57,7 +74,9 @@ class DirectorServices(private val context: Context, private val activity: Agent
                 val budget = if (attempt == 0) maxTokens else minOf(maxTokens, 3000)
                 var traceId: Long? = null
                 val r = try {
-                    val response = AiClient(AiProfile.fromSettings(context)).call(
+                    val base = AiProfile.fromSettings(context)
+                    val callProfile = if (it.apiKey.isNotBlank()) AiProfile(provider = base.provider, apiKey = it.apiKey, activeModel = it.model.ifBlank { base.activeModel }, customBaseUrl = base.customBaseUrl) else base
+                    val response = AiClient(callProfile).call(
                         role, prompt, system, maxTokens = budget,
                         onChunk = { chunk -> traceId?.let { id -> activity?.append(id, chunk) } },
                         onAttemptStart = { transportAttempt, model ->
@@ -124,6 +143,49 @@ class DirectorServices(private val context: Context, private val activity: Agent
             }.trim()
             o.script
         }
+    }
+
+    /**
+     * Round 11 — SAIF AGENT autopilot. One goal in; the model decides the whole creative brief
+     * (topic framing, language, duration, aspect, style, voice, pace, subtitles, asset policy) and
+     * drafts the narration script. Parsed defensively; any model junk becomes an honest failure.
+     */
+    suspend fun agentDecide(goal: String, current: DirectorBrief): Result<AgentDecision> {
+        val prompt = buildString {
+            appendLine("You are the SAIF AGENT autopilot inside SAIF AI. The owner gave ONE goal: "${goal.take(300)}".")
+            appendLine("Decide EVERYTHING needed for a short social video and reply with STRICT JSON only — no markdown fences, no commentary:")
+            appendLine("""{"script":"full spoken narration script as plain text (no scene directions, no emojis)","audience":"who this is for","narrationLanguage":"ISO 639-1 code, e.g. en or hi — use hi when the goal is Hinglish","onScreenLanguage":"language for on-screen text","durationSec":60,"aspect":"9:16","style":"cinematic explainer|bold meme|minimal documentary|neon cyber|hand-drawn doodle|crazy suspense","subtitles":"Yes - big bold captions","assetPolicy":"Use my Telegram library","voiceStyle":"warm|energetic|calm|documentary","pace":"calm|normal|fast"}""")
+            appendLine("Rules: a hook in the first sentence; script length must match durationSec (about 2.4 words per second); durationSec between 30 and 120; make it original — never copy a known script; if the goal names a style, aspect, duration or language, follow it exactly; aspect must be one of 9:16, 16:9, 1:1.")
+        }
+        val r = llm(prompt, role = LlmRole.PLANNER, system = "You are the SAIF AGENT. Reply with JSON only.",
+            maxTokens = 8000, traceKind = ActivityKind.SCRIPT, traceTitle = "SAIF Agent decision")
+        return r.fold({ raw -> parseAgentDecision(goal, current, raw) }, { Result.failure(it) })
+    }
+
+    private fun parseAgentDecision(goal: String, current: DirectorBrief, raw: String): Result<AgentDecision> = runCatching {
+        val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val o = JSONObject(cleaned)
+        val script = o.optString("script", "").trim()
+        val dur = o.optInt("durationSec", 60).coerceIn(30, 120)
+        val aspect = o.optString("aspect", "9:16").ifBlank { "9:16" }
+        val lang = o.optString("narrationLanguage", "en").ifBlank { "en" }
+        val brief = current.copy(
+            prompt = goal,
+            scriptMode = ScriptMode.FULL_SCRIPT_PRESERVE,
+            durationSec = dur, aspect = aspect,
+            audience = o.optString("audience", "").ifBlank { null },
+            narrationLanguage = lang,
+            onScreenLanguage = o.optString("onScreenLanguage", lang).ifBlank { lang },
+            subtitleLanguage = o.optString("onScreenLanguage", lang).ifBlank { lang },
+            researchLanguage = lang,
+            style = o.optString("style", "").ifBlank { null },
+            subtitles = o.optString("subtitles", "Yes - big bold captions").ifBlank { null },
+            assetPolicy = o.optString("assetPolicy", "Use my Telegram library").ifBlank { null },
+            voiceStyle = o.optString("voiceStyle", "").ifBlank { null },
+            pace = o.optString("pace", "normal").ifBlank { null },
+            narrationMode = o.optString("narrationMode", "").ifBlank { null }
+        )
+        AgentDecision(brief, script)
     }
 
     /** A stronger opening line than [current], or a failure explaining why nothing changed. */
