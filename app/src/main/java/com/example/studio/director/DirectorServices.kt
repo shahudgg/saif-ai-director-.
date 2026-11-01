@@ -184,7 +184,8 @@ class DirectorServices(private val context: Context, private val activity: Agent
      */
     suspend fun planManifest(
         b: DirectorBrief, script: String, transcript: Transcript? = null, totalMsOverride: Long? = null,
-        onProgress: (Int, Int) -> Unit = { _, _ -> }, researchDigest: String? = lastDigest
+        onProgress: (Int, Int) -> Unit = { _, _ -> }, researchDigest: String? = lastDigest,
+        onSceneAccepted: (Int, Scene) -> Unit = { _, _ -> }
     ): Result<SceneManifest> {
         val fps = 30
         lastPlanNote = ""
@@ -242,7 +243,12 @@ class DirectorServices(private val context: Context, private val activity: Agent
                     }
                     if (cacheValid) {
                         activity?.instant(ActivityKind.SCENE_JSON, "Cached scene batch accepted", "${outs.size} scenes passed validation and uniqueness checks.")
-                        batch.forEachIndexed { k, iv -> modelScenes[iv.index] = cached[k]!! }
+                        batch.forEachIndexed { k, iv ->
+                            val scene = cached[k]!!
+                            modelScenes[iv.index] = scene
+                            val graph = scene.graph?.let { LayoutEngine.repair(SceneLint.adoptCards(it, aw, ah), aw, ah, scene.durationMs).graph }
+                            onSceneAccepted(iv.index, scene.copy(graph = graph))
+                        }
                         acceptedGraphs.clear(); acceptedGraphs.addAll(cacheGraphs)
                         continue
                     }
@@ -292,7 +298,13 @@ class DirectorServices(private val context: Context, private val activity: Agent
                     }
                     if (accepted == null) failedBatches++
                     accepted?.let { ok ->
-                        batch.forEachIndexed { k, iv -> modelScenes[iv.index] = ok[k]; sceneCache[cacheKey(b, outs[k])] = ok[k] }
+                        batch.forEachIndexed { k, iv ->
+                            val scene = ok[k]
+                            modelScenes[iv.index] = scene
+                            sceneCache[cacheKey(b, outs[k])] = scene
+                            val graph = scene.graph?.let { LayoutEngine.repair(SceneLint.adoptCards(it, aw, ah), aw, ah, scene.durationMs).graph }
+                            onSceneAccepted(iv.index, scene.copy(graph = graph))
+                        }
                         ok.forEach { sc -> sc.graph?.let { gr ->
                             acceptedGraphs.add(LayoutEngine.repair(SceneLint.adoptCards(gr, aw, ah), aw, ah, sc.durationMs).graph)
                         } }
@@ -334,14 +346,18 @@ class DirectorServices(private val context: Context, private val activity: Agent
                     ?: return Result.failure(IllegalStateException("Could not find a unique valid design for scene ${i + 1}; no repeated scene was accepted."))
                 localCount++
             }
-            builtGraphs.add(graph)
-            scenes += Scene(
+            val scene = Scene(
                 id = o.id, startMs = o.startMs, endMs = o.endMs, narration = o.narration,
                 visualObjective = "${beat.intent.name}: ${beat.headline}".take(80), graph = graph,
                 assets = modelScene?.assets ?: emptyList(),
                 transitionIn = tr, transitionMs = if (tr == "none") 0L else 400L,
                 cues = if (BrandKit.autoSfx(context)) SfxPlanner.cuesFor(beat, tr) else emptyList(), caption = o.narration
             )
+            val partialFatal = SceneValidator.fatal(SceneValidator.validate(SceneManifest(fps = fps, scenes = scenes + scene)))
+            if (partialFatal.isNotEmpty()) return Result.failure(IllegalStateException(partialFatal.first().message))
+            builtGraphs.add(graph)
+            scenes += scene
+            onSceneAccepted(i, scene)
         }
         val note = StringBuilder("Planned ${scenes.size} beats (about ${"%.1f".format(scenes.sumOf { it.durationMs } / 1000.0 / scenes.size)} s each)")
         note.append(when (strategy) { null -> " — no AI model configured, so visuals were designed locally from your script."; else -> " — model strategy: ${strategy.name}." })
@@ -392,7 +408,7 @@ class DirectorServices(private val context: Context, private val activity: Agent
                 val text = g.joinToString(" ") { it.narration.trim() }
                 val event = activity?.begin(ActivityKind.NARRATION, "Narrating ${g.joinToString { it.id }}")
                 try {
-                    DeviceSpeech.synthesize(context, text, b.narrationLanguage, b.pace, dir, g.first().id).fold(
+                    DeviceSpeech.synthesize(context, text, b.narrationLanguage, b.pace, dir, g.first().id, b.answers[GuidedBriefOptions.VOICE]).fold(
                         { c ->
                             clips += NarrationClip(g.first().id, "file://${c.file.absolutePath}", c.durationMs, text, if (g.size > 1) g.map { it.id } else emptyList())
                             event?.let { activity?.finish(it, detail = "Audio created · ${c.durationMs} ms") }

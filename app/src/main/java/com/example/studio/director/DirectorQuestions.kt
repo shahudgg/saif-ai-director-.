@@ -147,7 +147,7 @@ object DirectorQuestions {
         val unanswered = queue.filter { !brief.answered(it.key) && !alreadyKnown(brief, it.key, aspect) }
         val required = unanswered.firstOrNull { !it.optional }
         if (required != null) return required
-        val askedOptional = brief.answers.size + brief.skipped.size
+        val askedOptional = brief.answers.keys.count { it !in GuidedBriefOptions.METADATA_KEYS } + brief.skipped.size
         return if (askedOptional < MAX_OPTIONAL_QUESTIONS) unanswered.firstOrNull() else null
     }
 
@@ -214,5 +214,7 @@ object DirectorQuestions {
         b.subtitles?.let { appendLine("• Subtitles: $it") }
         b.assetPolicy?.let { appendLine("• Visual source: $it") }
         b.avoid?.let { appendLine("• Avoid: $it") }
+        b.answers[GuidedBriefOptions.VOICE]?.let { appendLine("• Narration voice: $it") }
+        GuidedBriefOptions.music(b)?.let { appendLine("• Music: ${it.name} (${it.durationMs / 1000}s available, no looping)") }
     }.trim()
 }

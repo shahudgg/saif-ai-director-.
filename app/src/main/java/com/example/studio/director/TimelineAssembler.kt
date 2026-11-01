@@ -273,6 +273,30 @@ object TimelineAssembler {
         return merged to (problems + validate(merged))
     }
 
+    /** Replace only the director's background-music item; unrelated user audio is never removed. */
+    fun withBackgroundMusic(base: StudioProject, videoDurationMs: Long, music: BackgroundMusic?): Pair<StudioProject, List<String>> {
+        var p = ensureLanes(base.copy(items = base.items.filterNot {
+            it.origin == "ai" && it.aiWhy?.startsWith("director:music:") == true
+        }))
+        if (music == null) return p to emptyList()
+        if (music.uri.isBlank() || music.durationMs <= 0L || videoDurationMs <= 0L)
+            return p to listOf("Music was not added: missing audio source or duration.")
+        // A source is never extended beyond its real duration; this path does not loop music.
+        val lengthMs = minOf(music.durationMs, videoDurationMs, Long.MAX_VALUE / 1000L)
+        val lenUs = us(lengthMs)
+        val item = AudioItem(
+            id = UUID.randomUUID().toString(), laneId = laneId(p, TrackType.AUDIO, "lane_audio_1"),
+            startUs = 0L, durationUs = lenUs, audioUri = music.uri, isSfx = false,
+            volume = GuidedBriefOptions.safeVolume(music.volume), audioDucking = true, duckingAmount = 0.55f,
+            fadeInUs = us(minOf(300L, lengthMs / 3)), fadeOutUs = us(minOf(400L, lengthMs / 3)),
+            label = "Music: ${music.name.take(32)}", origin = "ai", aiWhy = "director:music:background:user selected"
+        )
+        p = p.copy(items = p.items + item, updatedAt = System.currentTimeMillis())
+        val notes = if (music.durationMs < videoDurationMs)
+            listOf("Music ends at ${music.durationMs / 1000}s; the selected file is shorter than the video and is not looped.") else emptyList()
+        return p to notes
+    }
+
     /** Detects overlaps on single-track lanes, missing media and zero durations. */
     fun validate(p: StudioProject): List<String> {
         val out = mutableListOf<String>()
