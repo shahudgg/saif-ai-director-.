@@ -4,11 +4,23 @@ import android.app.Application
 import com.example.data.local.ProviderSettingsManager
 import com.jarvis.assistant.SaifApiConfig
 import com.jarvis.assistant.SaifAutomation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 class SaifApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         ProviderSettingsManager.init(this)
+
+        // Round 10: pre-load the on-device speech model at app start, so the purple-mic live baatcheet
+        // works with ANY provider key. Cloud STT exists only for Groq/OpenAI/Gemini keys; for every
+        // other provider (OpenRouter, Anthropic, Groq-chat-only, custom...) Vosk transcribes on-device.
+        try {
+            com.jarvis.assistant.audio.VoskModelManager.init(
+                this, CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            )
+        } catch (_: Throwable) {}
 
         // Round 9: the memory recall of SAIF AI AUTOMATION is now an app-wide backend. Every feature (chat, live
         // baatcheet, video director, builder, agent) learns into it and recalls from it.

@@ -648,7 +648,7 @@ fun SettingsSheet(
                                 customWakeWordInput = it 
                                 wakeWordSavedFeedback = false
                             },
-                            placeholder = { Text("e.g. Hey Saif, Hey Jarvis", fontSize = 13.sp, color = SaifTheme.colors.textSecondary) },
+                            placeholder = { Text("e.g. Hey Saif", fontSize = 13.sp, color = SaifTheme.colors.textSecondary) },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             colors = OutlinedTextFieldDefaults.colors(

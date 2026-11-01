@@ -23,7 +23,7 @@ object WakeWordManager {
     private const val KEY_PRESETS = "wake_word_presets_list"
     
     const val DEFAULT_WAKE_WORD = "Hey Saif"
-    val DEFAULT_PRESETS = listOf("Hey Saif", "Hey Jarvis")
+    val DEFAULT_PRESETS = listOf("Hey Saif", "Saif")
 
     private var prefs: SharedPreferences? = null
 

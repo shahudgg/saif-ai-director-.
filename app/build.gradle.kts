@@ -118,6 +118,10 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
+  // Round 10: the in-app Flow AI browser uses AndroidView (androidx.compose.ui.viewinterop), which is already
+  // on the classpath transitively via material3 — verified by main building green with SaifLiveOrb's AndroidView.
+  // NOTE: do NOT add a version-less catalog entry for it — compose BOM 2024.09.00 does not constrain
+  // ui-viewinterop and Gradle then fails with "Could not find androidx.compose.ui:ui-viewinterop:." (CI run 41286782472).
   implementation("androidx.media3:media3-exoplayer:1.5.1")
   implementation("androidx.media3:media3-ui:1.5.1")
   implementation("androidx.media3:media3-common:1.5.1")

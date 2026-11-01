@@ -211,8 +211,10 @@ object SttRouter {
         }
 
         val vosk = com.jarvis.assistant.audio.VoskModelManager
-        if (!vosk.isModelReady.value && candidates.isEmpty() && context != null) {
-            withTimeoutOrNull(20_000L) { vosk.isModelReady.first { it } }
+        if (!vosk.isModelReady.value && context != null) {
+            // Round 10: the on-device model is the universal fallback that makes live voice work with ANY
+            // API key, so wait longer for its one-time download instead of giving up after 20 s.
+            withTimeoutOrNull(if (candidates.isEmpty()) 60_000L else 15_000L) { vosk.isModelReady.first { it } }
         }
         if (vosk.isModelReady.value) {
             // AudioPrep writes a standard 44-byte PCM WAV header for live turns.

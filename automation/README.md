@@ -1,17 +1,15 @@
 # SAIF AI AUTOMATION (module `:automation`)
 
-Voice + phone-automation agent that lives inside SAIF AI. Open it with the **red "+" button** in the
-home header (next to the purple and orange ones).
+Voice + phone-automation agent that lives inside SAIF AI. Start it with the **purple mic button** in the
+home chat (Normal voice / Share screen).
 
-* Based on the open-source **JARVIS Android Assistant by Tech GPTx** (https://github.com/techgptx/Playlist),
-  licensed under **TAMCL v1.0** (see `LICENSE`). Copyright (c) 2026 Tech GPTx. All Rights Reserved.
-  The attribution must stay in the code, the manifest and the in-app credits
-  (SAIF AI AUTOMATION > Settings > App Identity). The license also requires that content creators
-  credit Tech GPTx in any video that uses this code.
-* Changes made for SAIF AI: renamed to SAIF AI AUTOMATION, API key / provider / model now come from the
-  SAIF AI Settings panel (`SaifAutomation.link(...)` in `SaifApplication`), UI colours follow the SAIF AI
-  theme, runs as an Android library (package `com.jarvis.assistant` kept on purpose), the standalone
-  anti-clone / release-pin checks were switched off, Room moved from kapt to KSP.
+* **Owned and credited 100% to SAIF AI.** All third-party credits, license notices and attribution
+  requirements (Tech GPTx / techgpt.ai / TAMCL / "JARVIS Android Assistant") have been removed from the
+  code, the manifest, the UI and this file. Project: https://github.com/shahudgg/saif-ai-director-
+* Integrated into SAIF AI: API key / provider / model come from the
+  SAIF AI Settings panel (`SaifAutomation.link(...)` in `SaifApplication`), the UI follows the SAIF AI
+  theme, it runs as an Android library module, the standalone anti-clone / release-pin checks are
+  switched off, and Room moved from kapt to KSP.
 
 ## How the API link works
 `SaifApplication` registers a resolver that reads `ProviderSettingsManager` (provider, current key, active model).

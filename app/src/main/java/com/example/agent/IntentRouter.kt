@@ -31,6 +31,7 @@ object IntentRouter {
 
     // High-confidence, exact stop words. Deliberately excludes loose words like "bas" or "chup"
     // which occur naturally in sentences ("bas ek minute", "yeh basic hai").
+    private val VIDEO_INTENT_REGEX = Regex("""(video|reel|shorts?)\s+(banao|banaye|banana|banado|make|create)|make\s+(a\s+)?(ai\s+)?video|video\s+banao|reel\s+banao""", RegexOption.IGNORE_CASE)
     private val STOP_WORD_REGEX = Regex(
         """^(stop|ruko|rukiye|cancel|band karo|rok do|khatam karo)$""",
         RegexOption.IGNORE_CASE
@@ -153,6 +154,12 @@ object IntentRouter {
             }
         }
 
+        // Round 13: "video banao <topic>" / "make a video …" from the floating AI → the phone agent
+        // (full app access) opens the SAIF AI studio and runs the SAIF Agent crew with the goal.
+        if (VIDEO_INTENT_REGEX.containsMatchIn(lower)) {
+            return RouteDecision(RouteDestination.TASK,
+                "In the SAIF AI app, open the AI Studio / video studio (zero-to-video), tap the 🤖 SAIF Agent button, and enter this goal exactly: " + utterance)
+        }
         return RouteDecision(RouteDestination.CHAT, utterance)
     }
 }

@@ -64,7 +64,11 @@ fun StudioScreen(
     var showCodeEngineModal by remember { mutableStateOf(false) }
     var showAiProModal by remember { mutableStateOf(false) }
     var activeWorkflow by remember { mutableStateOf<com.example.studio.director.DirectorWorkflow?>(null) }
-    androidx.compose.runtime.LaunchedEffect(Unit) { StudioLaunch.take()?.let { activeWorkflow = it } }
+    var pendingAgentGoal by remember { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        StudioLaunch.take()?.let { activeWorkflow = it }
+        StudioLaunch.takeGoal()?.let { pendingAgentGoal = it }
+    }
     val appContext = androidx.compose.ui.platform.LocalContext.current
 
     val selectedItem = state.project.items.firstOrNull { it.id == state.selectedItemId }
@@ -296,7 +300,7 @@ fun StudioScreen(
                 )
             }
             Box(modifier = Modifier.fillMaxSize()) {
-                SaifDirectorScreen(controller = controller, onClose = { activeWorkflow = null })
+                SaifDirectorScreen(controller = controller, onClose = { activeWorkflow = null }, autoAgentGoal = pendingAgentGoal)
             }
         }
     }

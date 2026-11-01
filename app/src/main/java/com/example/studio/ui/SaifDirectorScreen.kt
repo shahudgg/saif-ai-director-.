@@ -23,12 +23,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -55,6 +59,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
@@ -74,17 +79,25 @@ import com.example.studio.director.WebResearch
 private val Bg = Color(0xFF09080E); private val Glass = Color(0xFF17131F); private val Purple = Color(0xFF7B2BFF); private val Cyan = Color(0xFF00E5FF)
 
 @Composable
-fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
+fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, autoAgentGoal: String? = null) {
     val ui by controller.ui.collectAsStateWithLifecycle()
     val activity by controller.activity.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
     val wf = controller.workflow
     var input by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var showAgent by remember { mutableStateOf(false) }
+    var showFlowSetup by remember { mutableStateOf(false) }
+    var showBatch by remember { mutableStateOf(false) }
     var checkingMusic by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scrollScope = androidx.compose.runtime.rememberCoroutineScope()
     BackHandler(onBack = onClose)
+    // Round 13: floating-AI / StudioLaunch can hand a goal straight to the SAIF Agent crew.
+    LaunchedEffect(autoAgentGoal) {
+        val g = autoAgentGoal
+        if (!g.isNullOrBlank() && !ui.working) controller.agentRun(g)
+    }
     LaunchedEffect(ui.turns.size) {
         if (ui.turns.size > 1) listState.animateScrollToItem(ui.turns.size - 1 + if (wf == DirectorWorkflow.ZERO_TO_VIDEO) 1 else 0)
     }
@@ -103,15 +116,37 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
     fun pick() = picker.launch(if (wf.needsSourceAudio) arrayOf("audio/*") else arrayOf("video/*"))
 
     Column(Modifier.fillMaxSize().background(Bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
-        // Header
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to timeline", tint = Color.White) }
-            Column(Modifier.weight(1f)) {
-                Text(wf.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Text(wf.subtitle, color = Color(0xFF9E95AC), fontSize = 10.sp, maxLines = 1)
+        // Header — Round 10: premium gradient banner with the SAIF AI • AI STUDIO badge
+        Box(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xFF2A1650), Color(0xFF12081F), Bg)))) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to timeline", tint = Color.White) }
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = RoundedCornerShape(6.dp), color = Purple.copy(alpha = 0.25f)) {
+                            Text("SAIF AI • AI STUDIO", color = Color(0xFFD9C6FF), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(wf.title, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, letterSpacing = 0.6.sp)
+                    }
+                    Text(wf.subtitle, color = Color(0xFF9E95AC), fontSize = 10.sp, maxLines = 1)
+                }
+                if (wf == DirectorWorkflow.ZERO_TO_VIDEO) TextButton(onClick = { scrollScope.launch { listState.animateScrollToItem(0) } }) { Text("Brief", color = Cyan, fontSize = 11.sp) }
+                IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Research, asset sources & Flow AI", tint = Color(0xFFCCC3D9)) }
             }
-            if (wf == DirectorWorkflow.ZERO_TO_VIDEO) TextButton(onClick = { scrollScope.launch { listState.animateScrollToItem(0) } }) { Text("Brief", color = Cyan, fontSize = 11.sp) }
-            IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Research & asset keys", tint = Color(0xFFCCC3D9)) }
+        }
+
+        // Round 12 — one-time Flow setup banner (the video's "browser button" at the top of zero-to-video)
+        if (wf == DirectorWorkflow.ZERO_TO_VIDEO && com.example.ui.components.FlowAssetStore.count(ctx) == 0) {
+            Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp), shape = RoundedCornerShape(12.dp), color = Color(0xFF1D1430), border = BorderStroke(1.dp, Color(0x557B2BFF))) {
+                Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("1️⃣", fontSize = 16.sp)
+                    Column(Modifier.weight(1f)) {
+                        Text("One-time setup: Google Flow mein login karo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Browser kholo, flow.google.com pe Gmail se login karo — baad mein SAIF Agent wahin se topic ke liye saari images 8-8 second ke gap mein bana lega aur yahin download karega.", color = Color(0xFF9E95AC), fontSize = 10.sp, lineHeight = 13.sp)
+                    }
+                    OutlinedButton(onClick = { showFlowSetup = true }) { Text("Open browser", fontSize = 10.sp) }
+                }
+            }
         }
 
         LazyColumn(state = listState, modifier = Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -160,6 +195,9 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showBatch = true }) { Text("🖼 Flow images") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showFlowSetup = true }) { Text("🌐 Flow browser") }
             if (ui.awaitingBriefConfirm && !ui.working) Button(enabled = !checkingMusic, onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
             if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(enabled = !checkingMusic, onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
             if (ui.readyToApply && !ui.working) Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
@@ -177,7 +215,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                 }
             }) { Text("Voiceover script") }
             if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::strengthenHook) { Text("Stronger hook") }
-            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::refreshAssets) { Text("Check Telegram again") }
+            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::attachFlowImages) { Text("🖼 Flow images lagao") }
             if (ui.applied) OutlinedButton(onClick = onClose) { Text("Back to timeline") }
             if (!ui.working) TextButton(enabled = !checkingMusic, onClick = controller::resetConversation) { Text("New chat", color = Color(0xFF9E95AC)) }
         }
@@ -190,6 +228,12 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
         }
     }
     if (showSettings) KeysDialog(onDismiss = { showSettings = false })
+    if (showAgent) AgentDialog(onDismiss = { showAgent = false }, onRun = { goal -> showAgent = false; controller.agentRun(goal) })
+    if (showFlowSetup) com.example.ui.components.FlowAiBrowserDialog(onDismiss = { showFlowSetup = false })
+    if (showBatch) com.example.ui.components.FlowBatchDialog(
+        topic = ui.brief.prompt.ifBlank { input }.ifBlank { "short explainer video" },
+        aspect = ui.brief.aspect ?: "9:16", style = ui.brief.style ?: "",
+        onDismiss = { showBatch = false }, onDone = { controller.attachFlowImages() })
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -241,10 +285,16 @@ private fun Chip(label: String, highlight: Boolean = false, enabled: Boolean = t
 private fun StatusPanel(label: String, detail: String, fraction: Float?, failed: Boolean, working: Boolean, paused: Boolean, onPause: () -> Unit, onCancel: () -> Unit) {
     Surface(shape = RoundedCornerShape(14.dp), color = Glass, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
         Column(Modifier.padding(12.dp)) {
-            Text((if (paused) "⏸ Paused — " else "") + label + if (detail.isNotBlank()) "  ($detail)" else "", color = if (failed) Color(0xFFFF6B6B) else Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Round 10: live stage dot — red on failure, amber while working, green when idle/done
+                Box(Modifier.size(9.dp).clip(CircleShape).background(if (failed) Color(0xFFFF6B6B) else if (working && !paused) Color(0xFFFFB86B) else Color(0xFF10B981)))
+                Spacer(Modifier.width(8.dp))
+                Text((if (paused) "⏸ Paused — " else if (working && !failed) "▶ " else "") + label + if (detail.isNotBlank()) "  ($detail)" else "",
+                    color = if (failed) Color(0xFFFF6B6B) else Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
             if (working && !paused) { // real fraction only when known; otherwise honest indeterminate bar
-                if (fraction != null) LinearProgressIndicator(progress = { fraction }, Modifier.fillMaxWidth().padding(top = 8.dp), color = Cyan)
-                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp), color = Cyan)
+                if (fraction != null) LinearProgressIndicator(progress = { fraction }, Modifier.fillMaxWidth().padding(top = 8.dp), color = if (failed) Color(0xFFFF6B6B) else Cyan)
+                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp), color = if (failed) Color(0xFFFF6B6B) else Cyan)
             }
             if (working) Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onPause) { Text(if (paused) "Resume" else "Pause") }
@@ -254,26 +304,51 @@ private fun StatusPanel(label: String, detail: String, fraction: Float?, failed:
     }
 }
 
+/** Round 11 — SAIF Agent autopilot entry: one goal, the agent does everything (research → video → timeline). */
+@Composable
+private fun AgentDialog(onDismiss: () -> Unit, onRun: (String) -> Unit) {
+    var goal by remember { mutableStateOf("") }
+    AlertDialog(onDismissRequest = onDismiss,
+        title = { Text("🤖 SAIF Agent — autopilot") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("One goal likho — agent khud research, script, plan, AI images, narration, assets aur timeline bana kar apply kar dega. Har scene unique banegi, live progress chat mein dikhega.", fontSize = 11.sp)
+            OutlinedTextField(goal, { goal = it }, label = { Text("e.g. 60-second Hinglish video on how UPI works") }, maxLines = 4)
+        } },
+        confirmButton = { TextButton(enabled = goal.isNotBlank(), onClick = { onRun(goal.trim()) }) { Text("Run agent") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
 @Composable
 private fun KeysDialog(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     var provider by remember { mutableStateOf(WebResearch.provider(ctx)) }
     var searchKey by remember { mutableStateOf("") }; var tg by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Research & asset sources") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Keys are encrypted with the Android Keystore and never shown or logged. Leave blank to keep the current value.", fontSize = 11.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Tavily", "Brave").forEach { p -> Chip(p, highlight = provider == p) { provider = p } } }
-            OutlinedTextField(searchKey, { searchKey = it }, label = { Text("$provider search API key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-            OutlinedTextField(tg, { tg = it }, label = { Text("Telegram bot token (asset library)") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-            Text("Status: search ${if (WebResearch.isConfigured(ctx)) "configured" else "not set"}, Telegram ${if (WebResearch.telegramToken(ctx).isNotBlank()) "configured" else "not set"}", fontSize = 11.sp)
-            ProductionOptions()
-            TelegramDiagnostics()
-        } },
-        confirmButton = { TextButton(onClick = {
-            val ok1 = searchKey.isBlank() || WebResearch.saveKey(ctx, provider, searchKey)
-            val ok2 = tg.isBlank() || WebResearch.saveTelegramToken(ctx, tg)
-            Toast.makeText(ctx, if (ok1 && ok2) "Saved securely" else "Secure storage unavailable on this device — nothing was saved", Toast.LENGTH_LONG).show(); onDismiss() }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
+    var showFlow by remember { mutableStateOf(false) }
+    var showTools by remember { mutableStateOf(false) }
+    Box {
+        AlertDialog(onDismissRequest = onDismiss, title = { Text("Research, asset sources & Flow AI") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Keys are encrypted with the Android Keystore and never shown or logged. Leave blank to keep the current value.", fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Tavily", "Brave").forEach { p -> Chip(p, highlight = provider == p) { provider = p } } }
+                OutlinedTextField(searchKey, { searchKey = it }, label = { Text("$provider search API key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+                OutlinedTextField(tg, { tg = it }, label = { Text("Telegram bot token (asset library)") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+                Text("Status: search ${if (WebResearch.isConfigured(ctx)) "configured" else "not set"}, Telegram ${if (WebResearch.telegramToken(ctx).isNotBlank()) "configured" else "not set"}, AI images ${if (com.example.llm.ImageGen.canGenerate(com.example.studio.ai.AiProfile.fromSettings(ctx).provider, com.example.studio.ai.AiProfile.fromSettings(ctx).apiKey)) "available with your ${com.example.studio.ai.AiProfile.fromSettings(ctx).provider} key" else "need a Gemini/OpenAI/OpenRouter key in Settings"}", fontSize = 11.sp)
+                // Round 10: in-app Flow AI browser (login once) + AI asset tools over imported images.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { showFlow = true }) { Text("🌐 Flow AI browser", fontSize = 11.sp) }
+                    OutlinedButton(onClick = { showTools = true }) { Text("🖼 AI asset tools (${com.example.ui.components.FlowAssetStore.count(ctx)})", fontSize = 11.sp) }
+                }
+                ProductionOptions()
+                TelegramDiagnostics()
+            } },
+            confirmButton = { TextButton(onClick = {
+                val ok1 = searchKey.isBlank() || WebResearch.saveKey(ctx, provider, searchKey)
+                val ok2 = tg.isBlank() || WebResearch.saveTelegramToken(ctx, tg)
+                Toast.makeText(ctx, if (ok1 && ok2) "Saved securely" else "Secure storage unavailable on this device — nothing was saved", Toast.LENGTH_LONG).show(); onDismiss() }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
+        if (showFlow) com.example.ui.components.FlowAiBrowserDialog(onDismiss = { showFlow = false })
+        if (showTools) com.example.ui.components.FlowAssetToolsDialog(onDismiss = { showTools = false })
+    }
 }
 
 

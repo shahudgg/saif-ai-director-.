@@ -12,6 +12,7 @@ import com.example.studio.composer.SceneUniqueness
 import com.example.studio.composer.SceneVarietyComposer
 import com.example.studio.composer.StyleDNA
 import android.net.Uri
+import com.example.llm.ImageGen
 import com.example.llm.LlmRole
 import com.example.llm.ProviderProfile
 import com.example.studio.ai.AiClient
@@ -27,6 +28,9 @@ import java.io.File
 data class ResearchOutcome(val digest: String?, val sources: List<ResearchSource>, val note: String)
 data class NarrationOutcome(val clips: List<NarrationClip>, val manifest: SceneManifest, val failures: List<String>)
 data class AssetOutcome(val assets: List<ResolvedAsset>, val unresolved: List<String>, val notes: List<String>, val needs: List<AssetNeed> = emptyList())
+
+/** Round 11 — SAIF AGENT autopilot decision: a complete brief plus an optional draft script. */
+data class AgentDecision(val brief: DirectorBrief, val script: String)
 data class FootagePlan(val summary: String, val keep: List<FootageRange>, val overlays: List<Triple<Long, Long, String>>, val captions: Boolean, val usedAi: Boolean)
 
 /** All real work behind the four workflows. Every method reports failure honestly instead of faking output. */
@@ -34,8 +38,22 @@ class DirectorServices(private val context: Context, private val activity: Agent
 
     fun providers(): List<ProviderEntry> {
         val prof = AiProfile.fromSettings(context)
-        val chat = ProviderRegistry.fromProfile(ProviderProfile.getById(prof.provider), prof.apiKey.isNotBlank(), prof.activeModel)
-        return listOf(chat, ProviderRegistry.deviceSpeech(), ProviderRegistry.webSearch(WebResearch.isConfigured(context), WebResearch.provider(context)))
+        val profile = ProviderProfile.getById(prof.provider)
+        // Round 11: one chain entry per saved key (so quota/auth on one key rotates to the next),
+        // plus the provider's own fallback models on the first key.
+        val keys = runCatching {
+            com.example.data.local.ProviderSettingsManager.init(context)
+            com.example.data.local.ProviderSettingsManager.loadState().apiKeys.filter { it.isNotBlank() }
+        }.getOrDefault(listOf(prof.apiKey).filter { it.isNotBlank() })
+        val models = (listOf(prof.activeModel) + profile.defaultFallbackModels).distinct()
+        val chatEntries = when {
+            keys.isEmpty() -> listOf(ProviderRegistry.fromProfile(profile, false, prof.activeModel))
+            else -> keys.flatMapIndexed { ki, k ->
+                val ms = if (ki == 0) models else listOf(prof.activeModel)
+                ms.map { m -> ProviderRegistry.fromProfile(profile, true, m).copy(apiKey = k) }
+            }
+        }
+        return chatEntries + listOf(ProviderRegistry.deviceSpeech(), ProviderRegistry.webSearch(WebResearch.isConfigured(context), WebResearch.provider(context)))
     }
 
     fun can(c: Capability) = ProviderRegistry.route(providers(), c) is RouteResult.Routed
@@ -56,7 +74,9 @@ class DirectorServices(private val context: Context, private val activity: Agent
                 val budget = if (attempt == 0) maxTokens else minOf(maxTokens, 3000)
                 var traceId: Long? = null
                 val r = try {
-                    val response = AiClient(AiProfile.fromSettings(context)).call(
+                    val base = AiProfile.fromSettings(context)
+                    val callProfile = if (it.apiKey.isNotBlank()) AiProfile(provider = base.provider, apiKey = it.apiKey, activeModel = it.model.ifBlank { base.activeModel }, customBaseUrl = base.customBaseUrl) else base
+                    val response = AiClient(callProfile).call(
                         role, prompt, system, maxTokens = budget,
                         onChunk = { chunk -> traceId?.let { id -> activity?.append(id, chunk) } },
                         onAttemptStart = { transportAttempt, model ->
@@ -123,6 +143,86 @@ class DirectorServices(private val context: Context, private val activity: Agent
             }.trim()
             o.script
         }
+    }
+
+    /**
+     * Round 11 — SAIF AGENT autopilot. One goal in; the model decides the whole creative brief
+     * (topic framing, language, duration, aspect, style, voice, pace, subtitles, asset policy) and
+     * drafts the narration script. Parsed defensively; any model junk becomes an honest failure.
+     */
+    suspend fun agentDecide(goal: String, current: DirectorBrief): Result<AgentDecision> {
+        val prompt = buildString {
+            appendLine("You are the SAIF AGENT autopilot inside SAIF AI. The owner gave ONE goal: \"${goal.take(300)}\".")
+            appendLine("Decide EVERYTHING needed for a short social video and reply with STRICT JSON only — no markdown fences, no commentary:")
+            appendLine("""{"script":"full spoken narration script as plain text (no scene directions, no emojis)","audience":"who this is for","narrationLanguage":"ISO 639-1 code, e.g. en or hi - use hi when the goal is Hinglish","onScreenLanguage":"language for on-screen text","durationSec":60,"aspect":"9:16","style":"cinematic explainer|bold meme|minimal documentary|neon cyber|hand-drawn doodle|crazy suspense","subtitles":"Yes - big bold captions","assetPolicy":"Use my Telegram library","voiceStyle":"warm|energetic|calm|documentary","pace":"calm|normal|fast"}""")
+            appendLine("Rules: a hook in the first sentence; script length must match durationSec (about 2.4 words per second); durationSec between 30 and 120; make it original — never copy a known script; if the goal names a style, aspect, duration or language, follow it exactly; aspect must be one of 9:16, 16:9, 1:1.")
+        }
+        val r = llm(prompt, role = LlmRole.PLANNER, system = "You are the SAIF AGENT. Reply with JSON only.",
+            maxTokens = 8000, traceKind = ActivityKind.SCRIPT, traceTitle = "SAIF Agent decision")
+        return r.fold({ raw -> parseAgentDecision(goal, current, raw) }, { Result.failure(it) })
+    }
+
+    private fun parseAgentDecision(goal: String, current: DirectorBrief, raw: String): Result<AgentDecision> = runCatching {
+        val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val o = JSONObject(cleaned)
+        val script = o.optString("script", "").trim()
+        val dur = o.optInt("durationSec", 60).coerceIn(30, 120)
+        val aspect = o.optString("aspect", "9:16").ifBlank { "9:16" }
+        val lang = o.optString("narrationLanguage", "en").ifBlank { "en" }
+        val brief = current.copy(
+            prompt = goal,
+            scriptMode = ScriptMode.FULL_SCRIPT_PRESERVE,
+            durationSec = dur, aspect = aspect,
+            audience = o.optString("audience", "").ifBlank { null },
+            narrationLanguage = lang,
+            onScreenLanguage = o.optString("onScreenLanguage", lang).ifBlank { lang },
+            subtitleLanguage = o.optString("onScreenLanguage", lang).ifBlank { lang },
+            researchLanguage = lang,
+            style = o.optString("style", "").ifBlank { null },
+            subtitles = o.optString("subtitles", "Yes - big bold captions").ifBlank { null },
+            assetPolicy = o.optString("assetPolicy", "Use my Telegram library").ifBlank { null },
+            voiceStyle = o.optString("voiceStyle", "").ifBlank { null },
+            pace = o.optString("pace", "normal").ifBlank { null },
+            narrationMode = o.optString("narrationMode", "").ifBlank { null }
+        )
+        AgentDecision(brief, script)
+    }
+
+    /** Round 12 — Flow autopilot: N distinct English image prompts for a topic (one per scene), strict JSON array. */
+    suspend fun flowImagePrompts(topic: String, n: Int, aspect: String?, style: String?): Result<List<String>> {
+        val prompt = buildString {
+            appendLine("You are the SAIF AGENT inside SAIF AI. Topic for a short video: " + topic.take(200) + ".")
+            appendLine("Write " + n + " DISTINCT, detailed ENGLISH image-generation prompts (one per scene), aspect " + (aspect ?: "9:16") + ", style " + (style ?: "cinematic explainer") + ".")
+            appendLine("Each prompt must name: subject, action, setting, lighting, camera angle and lens, colour mood. Every image must look DIFFERENT from the others. No text, watermarks or logos in the images.")
+            appendLine("""{"prompts":["prompt 1","prompt 2","prompt 3"]}""")
+            appendLine("Reply with STRICT JSON only — no markdown fences, no commentary.")
+        }
+        return llm(prompt, role = LlmRole.PLANNER, system = "You are the SAIF AGENT. Reply with JSON only.", maxTokens = 4000,
+            traceKind = ActivityKind.SCRIPT, traceTitle = "Flow image prompts").map { raw ->
+            val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            val arr = JSONObject(cleaned).optJSONArray("prompts") ?: throw IllegalStateException("The agent returned no prompt list: " + raw.take(100))
+            (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.length > 10 }.take(n)
+        }
+    }
+
+    /** Round 13 — ASSEMBLER agent's eyes: does this image fit this scene? One-line FIT / NOT FIT verdict. */
+    suspend fun visionVerdict(imagePath: String, sceneObjective: String, narration: String): Result<String> {
+        val prof = AiProfile.fromSettings(context)
+        if (!can(Capability.IMAGE_UNDERSTANDING) || prof.apiKey.isBlank()) return Result.failure(IllegalStateException("no vision provider configured"))
+        val b64 = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val src = android.graphics.BitmapFactory.decodeFile(imagePath) ?: return@runCatching null
+                val maxE = maxOf(src.width, src.height).coerceAtLeast(1)
+                val scale = 640f / maxE
+                val bmp = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(src, (src.width * scale).toInt().coerceAtLeast(1), (src.height * scale).toInt().coerceAtLeast(1), true) else src
+                val bos = java.io.ByteArrayOutputStream()
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, bos)
+                android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            }.getOrNull()
+        } ?: return Result.failure(IllegalStateException("unreadable image"))
+        return AiClient(prof).callWithImages(LlmRole.REVIEWER,
+            "Does this image fit a video scene with objective: \" + sceneObjective.take(140) + \" and narration: \" + narration.take(140) + \"? Reply in ONE line: FIT or NOT FIT — short reason.",
+            b64)
     }
 
     /** A stronger opening line than [current], or a failure explaining why nothing changed. */
@@ -195,7 +295,10 @@ class DirectorServices(private val context: Context, private val activity: Agent
             val bad = ModelOutputGuard.reason(script, b.narrationLanguage, requireScript = true)
             if (bad != null) return Result.failure(IllegalStateException("The script $bad. Please regenerate or edit it."))
         }
-        val outlines = BeatPlanner.outline(script, estMs, b.narrationLanguage, b.pace)
+        // Round 10: ~15 scenes for a 1-minute video — beat count scales with the target length, each beat 2.2–9 s.
+        val targetBeats = (estMs / 4000L).toInt().coerceIn(6, 24)
+        val targetBeatMs = (estMs / targetBeats).coerceIn(2200L, 9000L)
+        val outlines = BeatPlanner.outline(script, estMs, b.narrationLanguage, b.pace, targetBeatMs = targetBeatMs, maxBeats = 30)
         if (outlines.isEmpty()) return Result.failure(IllegalStateException("The script is empty, so no scenes can be planned."))
         val total = outlines.size
         val (aw, ah) = LayoutEngine.parseAspect(b.aspect ?: "9:16")
@@ -429,6 +532,80 @@ class DirectorServices(private val context: Context, private val activity: Agent
         return NarrationOutcome(clips, retimed, fails)
     }
 
+    // ------------------------------------------------------------------ Round 10: image-first scenes
+
+    /**
+     * IMAGE-FIRST SCENES: after the manifest is planned, ONE AI key visual is generated per scene (using the
+     * model's own `imagePrompt`, or a locally built prompt from the scene's objective + narration + the
+     * video's StyleDNA palette). Each image is saved to app storage and returned as a full-frame BACKDROP
+     * placement, so the animated code scene is drawn on top of it (overlay mode) — plan → image → animate.
+     * Scenes whose image fails keep pure procedural graphics (reported, never faked).
+     */
+    suspend fun generateSceneImages(
+        b: DirectorBrief, m: SceneManifest,
+        onStep: (Int, Int, String) -> Unit = { _, _, _ -> }
+    ): Pair<List<ResolvedAsset>, String?> {
+        val out = ArrayList<ResolvedAsset>()
+        val prof = AiProfile.fromSettings(context)
+        if (!ImageGen.canGenerate(prof.provider, prof.apiKey)) {
+            activity?.instant(ActivityKind.IMAGE_GEN, "AI image generation not available",
+                ProviderRegistry.missingMessage(Capability.IMAGE_GENERATION))
+            return out to null
+        }
+        val dir = File(context.filesDir, "director_assets/gen/${b.workflow.name.lowercase()}").apply { mkdirs() }
+        val dna = StyleDNA.fromBrief(b)
+        val aspect = b.aspect ?: "9:16"
+        val accent = dna.palettes.firstOrNull()?.accent?.ifBlank { null } ?: "#8B5CF6"
+        var ok = 0; var failed = 0
+        m.scenes.forEachIndexed { i, sc ->
+            currentCoroutineContext().ensureActive()
+            val prompt = sc.imagePrompt.ifBlank { imagePromptFor(sc, b, dna, aspect) }
+            onStep(i + 1, m.scenes.size, "AI key visual for scene ${i + 1}/${m.scenes.size}")
+            val ev = activity?.begin(ActivityKind.IMAGE_GEN, "Key visual · scene ${i + 1}/${m.scenes.size}", prompt.take(220))
+            val r = cancellableResult { ImageGen.generate(prompt, aspect, prof.provider, prof.apiKey, prof.activeModel, prof.customBaseUrl) }
+            val bytes = r.getOrNull()?.getOrNull()
+            if (bytes != null && bytes.isNotEmpty()) {
+                val f = File(dir, "scene_${sc.id}.png")
+                f.writeBytes(bytes)
+                val placement = AssetPlacements.clamp(AssetPlacement(
+                    role = "backdrop", width = 1f, height = 1f, fit = "cover",
+                    drift = 0.25f, animIn = "fadeIn", animInMs = 350L,
+                    glow = 0.10f, glowColor = accent))
+                out += ResolvedAsset(sceneId = sc.id, requestId = "gen-${sc.id}", kind = "image",
+                    localPath = f.absolutePath,
+                    source = "ai-image:${ImageGen.imageModel(prof.provider, prof.activeModel)} (generated in-app with your key)",
+                    verified = true, note = "AI key visual for: ${sc.visualObjective.take(90)}",
+                    ext = "png", placement = placement)
+                ok++
+                ev?.let { activity?.finish(it, detail = "${f.name} · ${bytes.size / 1024} KB · ${ImageGen.imageModel(prof.provider, prof.activeModel)}") }
+            } else {
+                failed++
+                val reason = r.exceptionOrNull()?.message ?: "empty image"
+                ev?.let { activity?.finish(it, ActivityState.FAILED, reason.take(140)) }
+                activity?.instant(ActivityKind.IMAGE_GEN, "Scene ${i + 1} key visual skipped — pure graphics used", reason.take(140))
+            }
+        }
+        val note = if (ok > 0) {
+            "Generated $ok AI key visual(s) with your ${prof.provider} key" +
+                (if (failed > 0) " — $failed scene(s) kept pure animated graphics (the image model could not draw them)" else "") +
+                ". Each scene = AI image backdrop + unique animated graphics on top."
+        } else null
+        return out to note
+    }
+
+    /** Local fallback image prompt when the model did not write one for the scene. */
+    private fun imagePromptFor(sc: Scene, b: DirectorBrief, dna: StyleDNA, aspect: String): String = buildString {
+        append("Cinematic key visual for a $aspect video scene. ")
+        append("Scene idea: ${sc.visualObjective.ifBlank { "illustrate the narration" }}. ")
+        append("Narration of this beat: \"${sc.narration.take(180)}\". ")
+        append("Video topic: ${b.prompt.take(120)}. Style: ${b.style ?: "premium motion graphics"}. ")
+        val pal = dna.palettes.firstOrNull()
+        if (pal != null) append("Colour mood: background ${pal.bgTop} to ${pal.bgBottom}, accents ${pal.accent} and ${pal.accent2}. ")
+        append("One strong subject with a clear focal point, dramatic cinematic lighting, depth of field, subtle film grain, 8k, highly detailed. ")
+        append("Do NOT include any text, watermark or logo. ")
+        append("Leave the upper-middle area relatively clean for animated overlay graphics.")
+    }
+
     suspend fun resolveAssets(b: DirectorBrief, m: SceneManifest, userId: String, exclude: Set<String> = emptySet(), onItem: (Int, Int) -> Unit = { _, _ -> }): AssetOutcome {
         val resolved = mutableListOf<ResolvedAsset>(); val unresolved = mutableListOf<String>(); val notes = mutableListOf<String>()
         val token = WebResearch.telegramToken(context)
@@ -460,10 +637,33 @@ class DirectorServices(private val context: Context, private val activity: Agent
         return AssetOutcome(resolved, unresolved, notes)
     }
 
-    /** Telegram problem the user can act on, in one sentence (empty library, no token...). */
-    private fun libraryProblem(token: String, count: Int): String? = when {
-        token.isBlank() -> "Telegram asset library is not configured (no bot token in this build). Add TG_BOT_TOKEN and TG_CHAT_ID as GitHub secrets and rebuild."
-        count == 0 -> "Your Telegram library is empty for this app: no posts were indexed yet. Upload assets to the channel (the bot must be admin), open Director > Settings > Telegram and tap Sync, or rebuild so the build-time catalog is included."
+    /**
+     * Telegram problem the user can act on. When the library really is empty the app now runs a live
+     * diagnose (getMe / getChat / membership / webhook) and shows the actual reason instead of just
+     * "your telegram is empty" — usually the bot is not admin, a webhook is set, or the posts are older
+     * than the 24 h the Bot API keeps. The APK also ships a build-time catalog (assets_catalog.json,
+     * committed in the repo), so the library is only empty when no asset was ever indexed anywhere.
+     */
+    private suspend fun libraryProblem(token: String, count: Int): String? = when {
+        token.isBlank() -> {
+            val baked = AssetLibrary.usable(TelegramAssetManager.loadMasterCatalog(context), "default").size
+            "No Telegram bot token in this build, so the $baked baked catalog item(s) cannot be downloaded. " +
+                "Add TG_BOT_TOKEN + TG_CHAT_ID as GitHub secrets and rebuild, or paste a bot token in the library screen."
+        }
+        count == 0 -> {
+            val diag = kotlinx.coroutines.withTimeoutOrNull(20_000L) {
+                cancellableResult {
+                    com.example.ui.components.TelegramCatalogStore(context)
+                        .diagnose(token, TelegramAssetManager.DEFAULT_CHANNEL_ID)
+                }.getOrNull()
+            }?.lines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.take(7)?.joinToString("\n")
+            buildString {
+                append("Your Telegram library is empty for this app: no posts were ever indexed (the APK's build-time catalog is empty too). ")
+                append("Upload assets to the channel (the bot must be ADMIN and have no webhook), open the library screen and tap Sync, ")
+                append("or forward your existing assets to the bot once in a private chat — file ids never expire.")
+                if (diag != null) append("\nDiagnostics:\n").append(diag)
+            }
+        }
         else -> null
     }
 
@@ -556,7 +756,9 @@ class DirectorServices(private val context: Context, private val activity: Agent
         b: DirectorBrief, m: SceneManifest, userId: String,
         onStep: (HuntStep) -> Unit = {},
         only: Set<String>? = null,
-        maxSlots: Int = 48
+        maxSlots: Int = 48,
+        /** Round 10: scene ids that already have an AI-generated key visual — their picture slot is skipped (sounds are still hunted). */
+        skipVisualFor: Set<String> = emptySet()
     ): AssetOutcome {
         val resolved = ArrayList<ResolvedAsset>()
         val unresolved = ArrayList<String>()
@@ -598,7 +800,7 @@ class DirectorServices(private val context: Context, private val activity: Agent
         if (!vision) notes += "No vision-capable provider is configured, so downloaded files are accepted on technical checks and keyword match only (the hunter cannot LOOK at them)."
         if (!chat) notes += "No AI model is configured, so assets were hunted with keywords taken from the narration instead of an AI asset editor."
 
-        val slots = HuntSlots.build(m, b.aspect).filter { sl -> only == null || sl.sceneId in only }.take(maxSlots)
+        val slots = HuntSlots.build(m, b.aspect).filter { sl -> (only == null || sl.sceneId in only) && !(!sl.isSfx && sl.sceneId in skipVisualFor) }.take(maxSlots)
         if (slots.isEmpty()) {
             notes += "No place in this video asked for a library asset."
             return AssetOutcome(emptyList(), emptyList(), notes)

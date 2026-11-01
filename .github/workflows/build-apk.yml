@@ -113,3 +113,15 @@ jobs:
       with:
         name: app-debug
         path: app/build/outputs/apk/debug/app-debug.apk
+
+    # Round 11: also attach the APK to a rolling prerelease so it can be downloaded directly from
+    # https://github.com/shahudgg/saif-ai-director-./releases (tag: saif-ai-apk) without opening Actions.
+    - name: Publish APK to the saif-ai-apk release
+      if: success()
+      continue-on-error: true
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: saif-ai-apk
+        name: "SAIF AI Director - debug APK (auto-build)"
+        prerelease: true
+        files: app/build/outputs/apk/debug/app-debug.apk
