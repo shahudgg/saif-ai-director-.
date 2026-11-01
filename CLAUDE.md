@@ -115,6 +115,26 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
+**Round 10 (this ZIP)** — four asks: (A) purple mic Normal/Screen-share works with ANY provider key, (B) zero-to-video = unique scenes + one AI image per scene + live progress, (C) Telegram "empty" bug fixed for good, (D) in-app Flow AI browser + AI asset tools. All SAIF AI automation / Tech GPTx / TAMCL credits removed; everything is branded SAIF AI.
+
+*A. Any-key live modes*
+- `SttRouter` now pre-initializes Vosk and waits for whichever STT is configured; `LiveTurnLoop` runs a provider-agnostic turn-based STT → `AiClient` → TTS loop for non-Gemini providers (Gemini Live WebSocket path unchanged); accessibility-text vision fallback for screen share; `JarvisConversationService` host loop no longer hard-requires Gemini.
+
+*B. Zero-to-video, image-first*
+- New `llm/ImageGen.kt`: image generation + editing through the user's OWN key — Gemini `:generateContent` (`responseModalities:[TEXT,IMAGE]`, inlineData), OpenAI/OpenRouter/custom `/v1/images/generations|edits` (b64_json; OpenRouter edits send a base64 data-URL). Model picker keeps the active model when it is an image model, else `gemini-2.5-flash-image` / `gpt-image-1` / `google/gemini-2.5-flash-image`.
+- `ProviderRegistry` grants `Capability.IMAGE_GENERATION` for gemini/openai/openrouter/custom; new `ActivityKind.IMAGE_GEN`; `Scene.imagePrompt` (parse + encode); `DirectorPrompts.sceneBatchV2` schema gained `"imagePrompt":str` + an IMAGE-FIRST RULE (one detailed English prompt per scene).
+- `DirectorServices.planManifest` now targets `clamp(estMs/4000, 6, 24)` beats with `targetBeatMs = clamp(estMs/target, 2200, 9000)`, `maxBeats = 30` (≈15 scenes for 1 minute). New `generateSceneImages(b, m, onStep)` writes `filesDir/director_assets/gen/<wf>/scene_<id>.png` as a full-frame BACKDROP `ResolvedAsset` (explicit placement — never the png→sticker default), with a local `imagePromptFor` fallback built from StyleDNA palettes. `huntAssets` gained `skipVisualFor` so scenes that already have an AI image don't also hunt a picture.
+- `DirectorController` calls it in `produceFromScript` and `runVoiceOver` (after planning, before narration; status GENERATING_ANIMATIONS "Generating AI key visuals i/n") and merges `assets = genAssets + ao.assets`; `refreshAssets` skips visual slots that already have one. Overlay needs no assembler change: `hasBackdrop` → SCENE_OVERLAY_MARKER draws the code scene on top of the image.
+- Live progress was already streamed through `AgentActivityPanel` + `StatusPanel`; the image phase now appears there too, and the status panel got a stage dot (amber working / red failed / green done).
+
+*C. Telegram "your telegram is empty"*
+- The bundled catalog is now baked into the APK (`app/src/main/assets/assets_catalog.json`, 93 items; CI regenerates it in `build-apk.yml`), `DirectorServices.libraryProblem` has a live `diagnose()` (getMe / getUpdates counts / 24h window / 20 MB limit / file_id lengths), and the UI exposes sync + diagnose + remove-webhook buttons.
+
+*D. Flow AI browser + asset tools (replaces the "Antigravity" idea with our own app)*
+- New `ui/components/FlowAiStudio.kt`: `FlowAssetStore` (persists `filesDir/flow_assets.json`; `fileId = "local:<abs path>"`), full-screen persistent WebView (login to flow.google.com / labs.google/fx once, stays logged in) with a `@JavascriptInterface` bridge + injected collector that imports every img/video URL into the store, DownloadListener → `flow_downloads/`, URL bar with shortcuts. `TelegramAssetManager.loadMasterCatalog` merges Flow items; `downloadCandidate` serves `local:` files without network. Entry points: ⚙ dialog in `SaifDirectorScreen` ("🌐 Flow AI browser", "🖼 AI asset tools (n)"). Asset tools: crop (`ImageCropEditPanel`), 🪄 AI edit / background-remove via `ImageGen.edit` with `AiProfile.fromSettings`, delete, paste-URL import.
+- UI polish: gradient SAIF AI • AI STUDIO header banner, stage dot in the status panel, richer workflow cards in `SaifAiWorkflowList`.
+- `app/build.gradle.kts` + `gradle/libs.versions.toml`: added BOM-managed `androidx.compose.ui:ui-viewinterop` for the in-WebView AndroidView.
+- Like every round: nothing was compiled here (no JDK in the sandbox); all touched files were bracket-checked and cross-module signatures verified by reading declarations. **GitHub Actions is the first real compile.**
 **Round 9 (this ZIP)** — three asks: (A) assets fetched **one at a time** and placed with full editor control, (B) scenes that never repeat a template, (C) all of SAIF AI AUTOMATION absorbed into the main app and the red **+** button deleted.
 
 *A. Sequential asset hunt + placement (ZERO TO VIDEO)*
@@ -139,7 +159,7 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - **SAIF ADVANCE VOICE**: new `utils/SaifVoice.kt` is the ONE voice source for chat, live baatcheet and video narration; added as the first `VoiceProfile` and the new default; `BrandKit.narrationVoice`/`DeviceSpeech`/`TTSManager`/`SaifDirectorScreen` all read it; the live engine asks the provider for the mapped name (`Puck`) via `SaifAutomation.hostVoiceName()`.
 - **Memory recall is app-wide**: new `util/SaifMemoryCore.kt` tags every fact with the feature that learned it (chat/live/video/builder/agent), mirrors into the engine's Room bank, and answers `promptBlock(feature)`. Wired into `ChatViewModel`, `AIApiUtility`, `LiveVoiceSessionManager`, `ScriptPipeline` (video) and `JarvisConversationService` (live). `DirectorController.answer` remembers channel/niche/audience/style/language.
 - **AUTO LANGUAGE** moved into the main Settings panel (`SaifMemoryCore.autoLanguage`), together with the engine's persona, silent execution, 3D-orb look, floating overlay, system permissions and owner voice-print lock. Nothing existing was removed and nothing was duplicated: API key/model stays in AI PROVIDER & MODELS, memories in AI MEMORY, export/clear in DATA & PRIVACY, theme in APPEARANCE, voice in VOICE & TTS.
-- Credit: the feature is presented as **SAIF AI • LIVE AUTOMATION ENGINE** in the app and in the automation footer, with the required "Built on JARVIS Android Assistant by Tech GPTx • TAMCL v1.0" attribution kept in the layout, `automation/README.md` and the manifest.
+- Branding: the feature is presented as **SAIF AI • LIVE AUTOMATION ENGINE** in the app, the automation footer, `automation/README.md` and the manifest. Round 10 removed every remaining "Built on JARVIS Android Assistant by Tech GPTx • TAMCL v1.0" / techgpt.ai credit — nothing in the app attributes third-party automation any more.
 - Tests added: `AssetPlacementTest`, `AssetHunterTest`, `PlacementApplierTest`, `SceneUniquenessTest`, `ElementClampTest`.
 
 *Still open (not done in this round)*

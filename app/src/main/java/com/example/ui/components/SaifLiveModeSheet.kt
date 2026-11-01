@@ -59,6 +59,16 @@ fun SaifLiveModeSheet(
                 "3D orb ke saath live baat karein. Awaaz SAIF AI ki apni hai aur API aapki Settings se aati hai.",
                 color = Color(0xFF9CA3AF), fontSize = 12.sp
             )
+            // Round 10: show which provider/key the live engine will use — it works with ANY provider
+            // (cloud STT for Groq/OpenAI/Gemini keys, on-device Vosk STT for everyone else).
+            val api = SaifAutomation.currentApi()
+            val apiLine = if (api.hasKey) {
+                "Engine: ${api.provider.ifBlank { "auto" }} • ${api.model.ifBlank { "default model" }} • koi bhi provider chalega"
+            } else {
+                "⚠️ Settings (⚙) me pehle koi bhi API key daalo — Gemini ho ya koi aur, dono kaam karenge."
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(apiLine, color = if (api.hasKey) Color(0xFF34D399) else Color(0xFFFBBF24), fontSize = 11.5.sp)
             Spacer(Modifier.height(18.dp))
 
             ModeCard(

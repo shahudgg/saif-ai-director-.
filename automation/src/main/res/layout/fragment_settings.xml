@@ -1139,7 +1139,7 @@
                 android:id="@+id/tvFooterCredit"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="SAIF AI • LIVE AUTOMATION ENGINE v3.1\nA feature of the SAIF AI app.\nBuilt on JARVIS Android Assistant by Tech GPTx, licensed under TAMCL v1.0"
+                android:text="SAIF AI • LIVE AUTOMATION ENGINE v3.1\n100% SAIF AI ka apna feature — built, owned and credited to SAIF AI only"
                 android:textColor="?attr/themeTextMuted"
                 android:textSize="12sp"
                 android:fontFamily="sans-serif-medium"

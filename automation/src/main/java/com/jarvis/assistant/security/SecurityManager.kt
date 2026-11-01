@@ -9,23 +9,23 @@ import kotlin.system.exitProcess
 
 /**
  * JARVIS ASSISTANT — SECURITY MODULE
- * Developer       : Tech GPTx
- * Copyright © 2026: Tech GPTx. All Rights Reserved.
- * GitHub          : https://github.com/techgptx/Playlist
+ * Developer       : SAIF AI
+ * Copyright © 2026: SAIF AI. All Rights Reserved.
+ * GitHub          : https://github.com/shahudgg/saif-ai-director-
  */
 object SecurityManager {
 
-    const val DEVELOPER_NAME    = "Tech GPTx"
-    const val COPYRIGHT_NOTICE  = "Copyright © 2026 Tech GPTx. All Rights Reserved."
-    const val GITHUB_REPO       = "https://github.com/techgptx/Playlist"
-    const val LICENSE_NAME      = "TAMCL v1.0 — Content creators MUST credit Tech GPTx"
+    const val DEVELOPER_NAME    = "SAIF AI"
+    const val COPYRIGHT_NOTICE  = "Copyright © 2026 SAIF AI. All Rights Reserved."
+    const val GITHUB_REPO       = "https://github.com/shahudgg/saif-ai-director-"
+    const val LICENSE_NAME      = "SAIF AI License (all rights with SAIF AI)"
 
     private const val EXPECTED_PACKAGE = "com.jarvis.assistant"
 
     /**
      * The original JARVIS app refused to run under any other package name (anti-clone check).
      * SAIF AI AUTOMATION is a licensed, modified part of the SAIF AI app, so the check is disabled.
-     * The Tech GPTx credits and the license stay in the code, manifest and UI (TAMCL v1.0).
+     * The SAIF AI credits and the license stay in the code, manifest and UI (SAIF AI License).
      */
     @Suppress("UNUSED_PARAMETER")
     fun verify(context: Context) {

@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /** A bounded, per-director in-memory trace. It does not write streamed model text to the project store. */
-enum class ActivityKind { RESEARCH, SCRIPT, PLANNING, SCENE_JSON, ASSET_SEARCH, ASSET_REJECTED, ASSET_ACCEPTED, NARRATION, TIMELINE, SOURCE, MODEL }
+enum class ActivityKind { RESEARCH, SCRIPT, PLANNING, SCENE_JSON, ASSET_SEARCH, ASSET_REJECTED, ASSET_ACCEPTED, NARRATION, TIMELINE, SOURCE, MODEL, IMAGE_GEN }
 enum class ActivityState { RUNNING, SUCCEEDED, FAILED, CANCELLED, RETRIED, INFO }
 
 data class ActivityEvent(

@@ -161,7 +161,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="6dp"
                         android:gravity="center"
-                        android:text="&quot;Hey Jarvis, wake up&quot;"
+                        android:text="&quot;Hey SAIF, wake up&quot;"
                         android:textColor="?attr/themeTextPrimary"
                         android:textSize="18sp"
                         android:textStyle="bold" />

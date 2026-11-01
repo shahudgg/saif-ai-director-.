@@ -264,6 +264,11 @@ object TelegramAssetManager {
         if (context != null) runCatching { TelegramCatalogStore(context).items() }.getOrNull()?.forEach { item ->
             if (list.none { it.fileId == item.fileId && item.fileId.isNotBlank() }) list.add(item)
         }
+        // Round 10: images imported from the in-app Flow AI browser are local files ("local:<path>") and join
+        // the same library, so the director's asset hunter can use them in videos too.
+        if (context != null) runCatching { FlowAssetStore.items(context) }.getOrNull()?.forEach { item ->
+            if (list.none { it.fileId == item.fileId && item.fileId.isNotBlank() }) list.add(item)
+        }
         for (item in memoryAssetCatalog) {
             if (list.none { it.assetId == item.assetId || it.title == item.title }) {
                 list.add(item)
@@ -612,6 +617,12 @@ object TelegramAssetManager {
         context: Context, userId: String, asset: TelegramAssetItem,
         botToken: String = DEFAULT_BOT_TOKEN, maxBytes: Long = 80L * 1024 * 1024
     ): TelegramAssetItem? = withContext(Dispatchers.IO) {
+        // Round 10: locally imported assets (Flow AI browser, AI-edited/cropped files) need no download.
+        if (asset.fileId.startsWith("local:")) {
+            val p = asset.fileId.removePrefix("local:")
+            val f = File(p)
+            return@withContext if (f.exists() && f.length() > 0) asset.copy(localCachedPath = p) else null
+        }
         val dir = File(context.filesDir, "telegram_workspace/${sanitizeUserId(userId)}").apply { mkdirs() }
         val safe = asset.title.replace(Regex("[^a-zA-Z0-9_-]"), "_")
         val target = File(dir, "${asset.assetId.ifBlank { safe }}_$safe.${asset.extension}")

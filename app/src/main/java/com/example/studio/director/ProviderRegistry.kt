@@ -32,6 +32,8 @@ enum class FailureKind { TRANSIENT, QUOTA, AUTH, INVALID_RESPONSE, UNSUPPORTED, 
 object ProviderRegistry {
     val VISION_PROVIDERS = setOf("gemini", "openai", "anthropic", "openrouter")
     val WHISPER_PROVIDERS = setOf("groq", "openai")
+    /** Providers with a real image-generation endpoint (see llm/ImageGen). */
+    val IMAGE_GEN_PROVIDERS = setOf("gemini", "openai", "openrouter")
 
     /** Builds the capability set from the app's provider profile. Vision/STT come from the declared dialect only. */
     fun fromProfile(profile: ProviderProfile, hasKey: Boolean, model: String): ProviderEntry {
@@ -42,6 +44,8 @@ object ProviderRegistry {
         if (profile.dialect.supportsVision && id in VISION_PROVIDERS) caps += Capability.IMAGE_UNDERSTANDING
         // Only providers with a Whisper-style /audio/transcriptions endpoint are claimed, because that is what the Transcriber implements.
         if (id in WHISPER_PROVIDERS) caps += Capability.AUDIO_TRANSCRIPTION
+        // Round 10: image generation is claimed only for providers ImageGen really implements.
+        if (id in IMAGE_GEN_PROVIDERS || id == "custom") caps += Capability.IMAGE_GENERATION
         return ProviderEntry(profile.id, profile.displayName, hasKey, model, caps)
     }
 

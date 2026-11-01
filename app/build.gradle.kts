@@ -118,6 +118,8 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
   implementation(libs.androidx.compose.ui.tooling.preview)
+  // Round 10: in-app Flow AI browser (WebView inside Compose) — AndroidView lives in this artifact (BOM-managed version).
+  implementation(libs.androidx.compose.ui.viewinterop)
   implementation("androidx.media3:media3-exoplayer:1.5.1")
   implementation("androidx.media3:media3-ui:1.5.1")
   implementation("androidx.media3:media3-common:1.5.1")

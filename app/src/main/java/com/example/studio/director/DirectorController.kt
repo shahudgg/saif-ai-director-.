@@ -496,6 +496,16 @@ class DirectorController(
         gate()
         services.lastPlanNote.takeIf { it.isNotBlank() }?.let { say(it) }
         update { copy(manifest = manifest, liveScenes = emptyList()) }
+        // Round 10 — IMAGE-FIRST: one AI key visual per scene is generated from the plan BEFORE narration, so the
+        // code-animated graphics play over a real generated backdrop (needs any image-capable key in Settings;
+        // without one this step is skipped with a note and the video is pure code-animation as before).
+        status(DirectorStage.GENERATING_ANIMATIONS, "Generating AI key visuals", detail = "0/${manifest.scenes.size}")
+        val (genAssets, genNote) = services.generateSceneImages(b, manifest) { i, n, t ->
+            status(DirectorStage.GENERATING_ANIMATIONS, "Generating AI key visuals", i.toFloat() / n, t)
+        }
+        gate()
+        genNote?.let { say(it) }
+        val genSceneIds = genAssets.map { it.sceneId }.toSet()
         status(DirectorStage.GENERATING_NARRATION, "Generating narration", detail = "0/${manifest.scenes.size}")
         val nar = services.synthNarration(b, manifest) { i, n -> status(DirectorStage.GENERATING_NARRATION, "Generating narration", i.toFloat() / n, "$i/$n") }
         gate()
@@ -508,8 +518,8 @@ class DirectorController(
         status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
         val ao = if (useLibrary) services.huntAssets(b, manifest, "default", onStep = { step ->
             status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-        }) else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; graphics are generated."), emptyList())
-        gate(); assets = ao.assets
+        }, skipVisualFor = genSceneIds) else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; AI key visuals and generated graphics are used."), emptyList())
+        gate(); assets = genAssets + ao.assets
         val requestNote = if (useLibrary) requestNeeds(b, manifest, ao) else null
         // Scenes that got a real library sound do not also get a synthetic one on top.
         manifest = manifest.copy(scenes = manifest.scenes.map { sc -> if (assets.any { it.sceneId == sc.id && it.kind == "audio" }) sc.copy(cues = emptyList()) else sc })
@@ -553,12 +563,19 @@ class DirectorController(
         services.lastPlanNote.takeIf { it.isNotBlank() }?.let { say(it) }
         m = m.copy(scenes = m.scenes.mapIndexed { i, s -> if (i == m.scenes.lastIndex) s.copy(endMs = maxOf(s.endMs, total)) else s })
         update { copy(manifest = m, liveScenes = emptyList()) }
+        // Round 10 — IMAGE-FIRST key visuals per scene (skipped automatically without an image-capable key).
+        status(DirectorStage.GENERATING_ANIMATIONS, "Generating AI key visuals", detail = "0/${m.scenes.size}")
+        val (genAssets2, genNote2) = services.generateSceneImages(b2, m) { i, n, t ->
+            status(DirectorStage.GENERATING_ANIMATIONS, "Generating AI key visuals", i.toFloat() / n, t)
+        }
+        gate()
+        genNote2?.let { say(it) }
         status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
         val ao = if (b.assetPolicy?.startsWith("Generate", true) == true) AssetOutcome(emptyList(), emptyList(), emptyList())
             else services.huntAssets(b, m, "default", onStep = { step ->
                 status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-            })
-        gate(); assets = ao.assets
+            }, skipVisualFor = genAssets2.map { it.sceneId }.toSet())
+        gate(); assets = genAssets2 + ao.assets
         val reqNote = requestNeeds(b, m, ao)
         store.saveArtifacts(projectId, workflow, narrationClips, assets)
         status(DirectorStage.BUILDING_TIMELINE, "Building the timeline")
@@ -666,9 +683,10 @@ class DirectorController(
             status(DirectorStage.FINDING_ASSETS, "Hunting the missing assets on Telegram, one at a time")
             // Only the places that are still empty are hunted again, so assets already placed are never re-downloaded.
             val empty = HuntSlots.unfilled(HuntSlots.build(m, b.aspect), assets).map { it.sceneId }.toSet()
+            val alreadyVisual = assets.filter { it.kind != "audio" }.map { it.sceneId }.toSet()
             val ao = services.huntAssets(b, m, "default", onStep = { step ->
                 status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-            }, only = empty.ifEmpty { null })
+            }, only = empty.ifEmpty { null }, skipVisualFor = alreadyVisual)
             val before = assets.size
             assets = ao.assets
             val reqNote = requestNeeds(b, m, ao)

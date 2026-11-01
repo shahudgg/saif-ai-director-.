@@ -840,9 +840,10 @@ class JarvisConversationService : Service() {
 
         val config = SaifAutomation.currentApi()
         val factory = SaifAutomation.hostLiveTurnFactory
-        // Keep the original bidi socket available as an opt-in fast path. The default
-        // uses the selected app TTS voice even when Gemini is the configured provider.
-        val useNative = config.isGemini && (SaifAutomation.useGeminiNativeLive || factory == null)
+        // Round 10: the provider-agnostic host loop (STT -> any LLM -> app TTS) is the DEFAULT for every
+        // provider, so the purple-mic live baatcheet works with any API key. The Gemini Live bidi socket
+        // stays available only as an explicit opt-in (Settings > "use Gemini native live audio").
+        val useNative = config.isGemini && SaifAutomation.useGeminiNativeLive
         if (!useNative) {
             if (factory == null) {
                 _liveError.value = JarvisLiveError("VOICE ENGINE UNAVAILABLE", "The host voice engine is not available.", "VOICE_ENGINE_UNAVAILABLE", "RETRY")

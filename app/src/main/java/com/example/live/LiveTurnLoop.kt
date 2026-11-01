@@ -281,17 +281,25 @@ class LiveTurnLoop(
         }
         val frame = if (com.jarvis.assistant.vision.ScreenCaptureManager.getInstance().isSharing.value) screenFrame else null
         val profile = ProviderProfile.detectProviderFromKey(key, settings.providerName)
-        if (frame != null && !profile.dialect.supportsVision) {
-            report("SCREEN VISION UNAVAILABLE", "The selected provider does not support images. Choose a vision-capable model to discuss the shared screen.", "VISION_UNAVAILABLE")
-            return
+        // Round 10: screen share must work with ANY provider. When the model cannot see images, the
+        // screen is described as text via the accessibility service instead of failing the turn.
+        var screenText = ""
+        val imageFrame = if (frame != null && profile.dialect.supportsVision) frame else null
+        if (frame != null && imageFrame == null) {
+            val svc = com.example.util.SaifAccessibilityService.instance
+            val app = svc?.getCurrentAppLabel(context).orEmpty()
+            val pkg = svc?.getCurrentPackage().orEmpty()
+            val hierarchy = svc?.inspectScreenHierarchy()?.take(1600).orEmpty()
+            screenText = "The user is sharing their screen, but the selected model cannot see images, so the screen is given as text. " +
+                "Current app: '$app' (package $pkg). Visible screen content:\n$hierarchy"
         }
         val request = LlmRequest(
             prompt = text,
             systemPrompt = "$systemPrompt\n\nReply naturally and concisely for speech in the user's language. " +
                 "Do not claim to have performed a device action unless it actually happened. " +
-                "Do not claim to see the screen unless an image is attached.",
+                "Do not claim to see the screen unless an image is attached or screen text is provided below.\n$screenText",
             history = synchronized(history) { history.toList() },
-            imagesBase64 = frame?.let { listOf(Base64.encodeToString(it, Base64.NO_WRAP)) } ?: emptyList(),
+            imagesBase64 = imageFrame?.let { listOf(Base64.encodeToString(it, Base64.NO_WRAP)) } ?: emptyList(),
             maxTokens = 400
         )
         val streamed = StringBuilder()

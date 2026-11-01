@@ -525,7 +525,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="• &quot;Remember that my passport is in the blue bag&quot;\n• &quot;Where is my passport?&quot;\n• &quot;What is the weather outside?&quot;\n• &quot;Good morning Jarvis, what is my schedule today?&quot;"
+                    android:text="• &quot;Remember that my passport is in the blue bag&quot;\n• &quot;Where is my passport?&quot;\n• &quot;What is the weather outside?&quot;\n• &quot;Good morning SAIF, what is my schedule today?&quot;"
                     android:textColor="?attr/themeTextMuted"
                     android:textSize="12.5sp"
                     android:lineSpacingExtra="3dp" />
@@ -758,7 +758,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="@techgptx.ai"
+                            android:text="@SAIF AI"
                             android:textColor="?attr/themeTextMuted"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -778,7 +778,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center"
-                android:text="SAIF AI AUTOMATION INTELLIGENCE OS • TECHGPT X\nAutonomous Hands-Free Architecture"
+                android:text="SAIF AI AUTOMATION INTELLIGENCE OS • SAIF AI\nAutonomous Hands-Free Architecture"
                 android:textColor="?attr/themeTextMuted"
                 android:textSize="11.5sp"
                 android:lineSpacingExtra="3dp" />

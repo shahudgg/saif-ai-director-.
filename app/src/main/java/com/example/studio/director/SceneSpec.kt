@@ -160,6 +160,8 @@ data class AudioCue(val kind: String, val description: String, val atMs: Long, v
 data class Scene(
     val id: String, val startMs: Long, val endMs: Long,
     val narration: String = "", val visualObjective: String = "",
+    /** Round 10: one detailed English image-gen prompt per scene (IMAGE-FIRST); empty for pure motion-graphics beats. */
+    val imagePrompt: String = "",
     val graph: SceneGraph? = null,
     val assets: List<AssetRequest> = emptyList(),
     val transitionIn: String = "fade", val transitionMs: Long = 400L,
@@ -347,7 +349,7 @@ object SceneJson {
         val end = if (o.has("endMs")) o.optLong("endMs") else start + o.optLong("durationMs", 4000L)
         return Scene(
             id = id, startMs = start, endMs = end,
-            narration = o.optString("narration", ""), visualObjective = o.optString("visualObjective", ""),
+            narration = o.optString("narration", ""), visualObjective = o.optString("visualObjective", ""), imagePrompt = o.optString("imagePrompt", ""),
             graph = o.optJSONObject("graph")?.let { parseGraph(it) },
             assets = o.optJSONArray("assets")?.let { a -> (0 until a.length()).map { i ->
                 val x = a.getJSONObject(i)
@@ -473,7 +475,7 @@ object SceneJson {
         put("sources", JSONArray().apply { m.sources.forEach { put(it) } })
         put("scenes", JSONArray().apply { m.scenes.forEach { s -> put(JSONObject().apply {
             put("id", s.id); put("startMs", s.startMs); put("endMs", s.endMs)
-            put("narration", s.narration); put("visualObjective", s.visualObjective)
+            put("narration", s.narration); put("visualObjective", s.visualObjective); put("imagePrompt", s.imagePrompt)
             put("transition", s.transitionIn); put("transitionMs", s.transitionMs); put("caption", s.caption)
             put("sourceInMs", s.sourceInMs); put("locked", s.locked)
             s.graph?.let { put("graph", graphToJson(it)) }

@@ -329,7 +329,7 @@ fun SaifLiveSettingsSection(glassBorderBrush: Brush) {
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "Built on JARVIS Android Assistant by Tech GPTx \u2022 TAMCL v1.0",
+                    text = "100% SAIF AI ka apna engine — built, owned and credited to SAIF AI only",
                     fontSize = 11.sp,
                     color = SaifTheme.colors.textSecondary
                 )

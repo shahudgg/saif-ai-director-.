@@ -122,8 +122,8 @@ fun SaifLiveOrb(
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         ready = true
-                        evaluateJavascript("window.JarvisOrb && window.JarvisOrb.setTheme('${if (isLightMode) "light" else "dark"}');", null)
-                        pendingState.value?.let { evaluateJavascript("window.JarvisOrb && window.JarvisOrb.setState('$it');", null) }
+                        evaluateJavascript("window.SaifOrb && window.SaifOrb.setTheme('${if (isLightMode) "light" else "dark"}');", null)
+                        pendingState.value?.let { evaluateJavascript("window.SaifOrb && window.SaifOrb.setState('$it');", null) }
                         pendingState.value = null
                     }
                 }
@@ -134,8 +134,8 @@ fun SaifLiveOrb(
         },
         update = { wv ->
             if (!ready) { pendingState.value = orbName; return@AndroidView }
-            wv.evaluateJavascript("window.JarvisOrb && window.JarvisOrb.setState('$orbName');", null)
-            wv.evaluateJavascript("window.JarvisOrb && window.JarvisOrb.setExternalAudio(${level.coerceIn(0f, 1f)}, ${freq.bass.coerceIn(0f, 1f)}, ${freq.high.coerceIn(0f, 1f)});", null)
+            wv.evaluateJavascript("window.SaifOrb && window.SaifOrb.setState('$orbName');", null)
+            wv.evaluateJavascript("window.SaifOrb && window.SaifOrb.setExternalAudio(${level.coerceIn(0f, 1f)}, ${freq.bass.coerceIn(0f, 1f)}, ${freq.high.coerceIn(0f, 1f)});", null)
         }
     )
 
