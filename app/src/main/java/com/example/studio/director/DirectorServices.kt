@@ -152,7 +152,7 @@ class DirectorServices(private val context: Context, private val activity: Agent
      */
     suspend fun agentDecide(goal: String, current: DirectorBrief): Result<AgentDecision> {
         val prompt = buildString {
-            appendLine("You are the SAIF AGENT autopilot inside SAIF AI. The owner gave ONE goal: "${goal.take(300)}".")
+            appendLine("You are the SAIF AGENT autopilot inside SAIF AI. The owner gave ONE goal: \"${goal.take(300)}\".")
             appendLine("Decide EVERYTHING needed for a short social video and reply with STRICT JSON only — no markdown fences, no commentary:")
             appendLine("""{"script":"full spoken narration script as plain text (no scene directions, no emojis)","audience":"who this is for","narrationLanguage":"ISO 639-1 code, e.g. en or hi - use hi when the goal is Hinglish","onScreenLanguage":"language for on-screen text","durationSec":60,"aspect":"9:16","style":"cinematic explainer|bold meme|minimal documentary|neon cyber|hand-drawn doodle|crazy suspense","subtitles":"Yes - big bold captions","assetPolicy":"Use my Telegram library","voiceStyle":"warm|energetic|calm|documentary","pace":"calm|normal|fast"}""")
             appendLine("Rules: a hook in the first sentence; script length must match durationSec (about 2.4 words per second); durationSec between 30 and 120; make it original — never copy a known script; if the goal names a style, aspect, duration or language, follow it exactly; aspect must be one of 9:16, 16:9, 1:1.")
