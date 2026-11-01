@@ -261,9 +261,8 @@ object TelegramAssetManager {
 
         // Persisted channel catalog (survives restarts). Built-in seed items with invented file ids were removed on purpose:
         // they could never be downloaded and made the director believe assets existed.
-        if (context != null) runCatching { TelegramCatalogStore(context).items() }.getOrNull()?.forEach { item ->
-            if (list.none { it.fileId == item.fileId && item.fileId.isNotBlank() }) list.add(item)
-        }
+        // Round 13: Telegram catalog is NO LONGER merged — video assets come from the Flow AI browser only.
+        // (FlowAssetStore items below are still merged.)
         // Round 10: images imported from the in-app Flow AI browser are local files ("local:<path>") and join
         // the same library, so the director's asset hunter can use them in videos too.
         if (context != null) runCatching { FlowAssetStore.items(context) }.getOrNull()?.forEach { item ->

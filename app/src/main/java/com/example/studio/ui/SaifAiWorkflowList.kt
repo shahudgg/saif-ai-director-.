@@ -109,5 +109,8 @@ private fun WorkflowCard(title: String, desc: String, tag: String?, icon: ImageV
 /** One-shot handoff from the "+" sheet to the studio: which AI workflow to open as soon as the editor appears. */
 object StudioLaunch {
     @Volatile var pending: com.example.studio.director.DirectorWorkflow? = null
+    /** Round 13: optional goal handed to the SAIF Agent crew when the workflow opens (from the floating AI). */
+    @Volatile var pendingGoal: String? = null
     fun take(): com.example.studio.director.DirectorWorkflow? { val p = pending; pending = null; return p }
+    fun takeGoal(): String? { val g = pendingGoal; pendingGoal = null; return g }
 }

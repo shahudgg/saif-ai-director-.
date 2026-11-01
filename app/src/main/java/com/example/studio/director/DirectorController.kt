@@ -457,38 +457,65 @@ class DirectorController(
     }
 
     /**
-     * Round 11 — SAIF AGENT autopilot. One goal in, a finished video out: the agent decides the brief,
-     * researches, writes the script, plans unique scenes, generates one AI key visual per scene, narrates,
-     * hunts assets, builds the timeline and applies it — every step streamed live in the chat.
+     * Round 13 — SAIF AGENT CREW (multi-agent, supervised). One goal in, a finished video out:
+     * PLANNER decides the brief + researches, SCRIPT writes the narration, ASSEMBLER plans unique scenes +
+     * generates AI key visuals + narrates + builds the timeline, PLACER fixes Flow-browser images onto the
+     * scenes in order (with vision checks). The WATCHDOG retries any failed step once and then takes the
+     * declared fallback path — every handoff is logged live in the chat panel.
      */
     fun agentRun(goal: String) {
         if (_ui.value.working || goal.isBlank()) return
         if (workflow != DirectorWorkflow.ZERO_TO_VIDEO) { say("The SAIF Agent runs the Zero-to-video workflow — open that first.", error = true); return }
         update { copy(working = true, problems = emptyList(), awaitingBriefConfirm = false) }
         job = scope.launch { guarded {
-            say("🤖 SAIF Agent took over: \"${goal.take(120)}\". Research → script → plan → AI key visuals → narration → assets → timeline — all automatic, every scene unique.")
-            status(DirectorStage.RESEARCHING, "SAIF Agent deciding the brief", detail = goal.take(80))
-            val dec = services.agentDecide(goal, _ui.value.brief).getOrElse { fail("Agent planning failed: ${it.message}"); return@guarded }
+            val crew = AgentOrchestrator(activityBus)
+            say("🤖 SAIF AGENT crew start: PLANNER → SCRIPT → ASSEMBLER → PLACER, WATCHDOG har step pe nazar rakhega. Goal: " + goal.take(120))
+            status(DirectorStage.RESEARCHING, "SAIF Agent crew deciding the brief", detail = goal.take(80))
+            val dec = crew.supervised(AgentRole.PLANNER, "brief + research decide kar raha hai", goal.take(120),
+                fallbackNote = "Model brief nahi de paya — default brief (60s, 9:16) use hoga.") {
+                services.agentDecide(goal, _ui.value.brief)
+            }.getOrElse {
+                Result.success(AgentDecision(_ui.value.brief.copy(prompt = goal, durationSec = _ui.value.brief.durationSec ?: 60, aspect = _ui.value.brief.aspect ?: "9:16"), ""))
+            }
             update { withBrief(dec.brief) }
             gate()
             val b = _ui.value.brief
             status(DirectorStage.RESEARCHING, "SAIF Agent researching the topic")
-            val r = services.research(b) { step -> status(DirectorStage.RESEARCHING, "SAIF Agent researching the topic", detail = step) }
+            val r = crew.supervised(AgentRole.PLANNER, "topic research kar raha hai", "",
+                fallbackNote = "Research skip — model ke apne knowledge se script likha jayega.") {
+                Result.success(services.research(b) { step -> status(DirectorStage.RESEARCHING, "SAIF Agent researching the topic", detail = step) })
+            }.getOrNull() ?: ResearchOutcome(null, emptyList(), "Research skipped (watchdog fallback).")
             gate()
             update { copy(sources = r.sources) }
             var script = dec.script
             if (script.isBlank()) {
-                status(DirectorStage.WRITING_SCRIPT, "SAIF Agent writing the script")
-                script = services.writeScript(b, r.digest).getOrElse { fail("Script writing failed: ${it.message}"); return@guarded }
+                status(DirectorStage.WRITING_SCRIPT, "SAIF Agent script likh raha hai")
+                script = crew.supervised(AgentRole.SCRIPT, "narration script likh raha hai", "",
+                    fallbackNote = "Model script nahi likh paya — simple local script use hoga.") {
+                    services.writeScript(b, r.digest)
+                }.getOrElse {
+                    "Hook: " + goal.take(90) + ".\n\n" + goal.take(220) +
+                        "\n\nTeen points mein samjhata hoon: pehla, doosra, teesra. Ant mein ek clear call to action."
+                }
             }
             gate()
             update { copy(script = script, scriptApproved = true) }
-            say("🤖 Brief + script ready (${SpeechTiming.countWords(script)} words, ${b.durationSec ?: 60}s, ${b.aspect ?: "9:16"}). Producing the video now…")
+            say("🤖 Brief + script ready (" + SpeechTiming.countWords(script) + " words, " + (b.durationSec ?: 60) + "s, " + (b.aspect ?: "9:16") + "). ASSEMBLER ab plan + AI key visuals + narration + timeline banayega…")
             produceFromScript(script)
             gate()
+            val flowCount = com.example.ui.components.FlowAssetStore.items(appContext).count { it.type == "image" }
+            if (flowCount > 0 && _ui.value.manifest != null && _ui.value.readyToApply) {
+                val mm = _ui.value.manifest!!
+                crew.supervised(AgentRole.PLACER, "Flow ki " + flowCount + " images ko scenes pe fix kar raha hai", "",
+                    fallbackNote = "Order-based placement skip — AI key visuals hi use honge.") {
+                    placeFlowImages(mm)
+                    Result.success(Unit)
+                }
+                gate()
+            }
             if (_ui.value.readyToApply) {
                 applyToTimeline()
-                say("✅ SAIF Agent finished — the video is on your timeline. Open the editor and tap Export for the MP4.")
+                say("✅ SAIF AGENT crew ne kaam khatam kiya — video timeline pe aa gaya. Editor mein Export dabao (MP4).")
             }
         } }
     }
@@ -551,11 +578,10 @@ class DirectorController(
         // The asset hunter fills the timeline ONE ASSET AT A TIME: it looks at one place, asks for that one file
         // (format + 2-3 keywords), searches Telegram, downloads it, LOOKS at it, retries with changed keywords when
         // it is wrong, and only then places it and moves on to the next place.
-        val useLibrary = b.assetPolicy?.startsWith("Generate", true) != true
-        status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
-        val ao = if (useLibrary) services.huntAssets(b, manifest, "default", onStep = { step ->
-            status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-        }, skipVisualFor = genSceneIds) else AssetOutcome(emptyList(), listOf("Library assets were switched off for this video; AI key visuals and generated graphics are used."), emptyList())
+        // Round 13: Telegram asset hunting REMOVED — visuals come from the Flow AI browser + AI image generation only.
+        val useLibrary = false
+        status(DirectorStage.FINDING_ASSETS, "Preparing Flow AI / generated visuals")
+        val ao = AssetOutcome(emptyList(), listOf("Visuals: Flow AI images + one AI-generated key visual per scene (Telegram library disabled)."), emptyList())
         gate(); assets = genAssets + ao.assets
         val requestNote = if (useLibrary) requestNeeds(b, manifest, ao) else null
         // Scenes that got a real library sound do not also get a synthetic one on top.
@@ -608,10 +634,8 @@ class DirectorController(
         gate()
         genNote2?.let { say(it) }
         status(DirectorStage.FINDING_ASSETS, "Hunting assets one at a time from your Telegram library")
-        val ao = if (b.assetPolicy?.startsWith("Generate", true) == true) AssetOutcome(emptyList(), emptyList(), emptyList())
-            else services.huntAssets(b, m, "default", onStep = { step ->
-                status(DirectorStage.CHECKING_ASSETS, "Hunting assets from Telegram", step.fraction, step.text)
-            }, skipVisualFor = genAssets2.map { it.sceneId }.toSet())
+        // Round 13: Telegram hunting removed — visuals come from Flow AI / AI image generation.
+        val ao = AssetOutcome(emptyList(), emptyList(), listOf("Visuals: Flow AI images + AI-generated key visuals (Telegram library disabled)."), emptyList())
         gate(); assets = genAssets2 + ao.assets
         val reqNote = requestNeeds(b, m, ao)
         store.saveArtifacts(projectId, workflow, narrationClips, assets)
@@ -749,10 +773,15 @@ class DirectorController(
     fun attachFlowImages() {
         val m = _ui.value.manifest ?: run { say("Pehle ek plan banao (🤖 SAIF Agent ya Confirm & start). Flow images abhi sirf library mein add hue hain — agle run mein khud aa jayenge.", error = true); return }
         if (_ui.value.working) return
-        job = scope.launch { guarded {
+        job = scope.launch { guarded { placeFlowImages(m) } }
+    }
+
+    /** Round 13 — shared by the UI button and the PLACER agent inside the agent crew. */
+    private suspend fun placeFlowImages(m: SceneManifest) {
+        run {
             status(DirectorStage.CHECKING_ASSETS, "Flow images ko sahi scene pe fix kar raha hoon")
             val imgs = com.example.ui.components.FlowAssetStore.items(appContext).filter { it.type == "image" }.sortedBy { it.messageId }
-            if (imgs.isEmpty()) { say("Flow library khali hai — pehle 🌐 browser se images generate karo.", error = true); return@guarded }
+            if (imgs.isEmpty()) { say("Flow library khali hai — pehle 🌐 browser se images generate karo.", error = true); return@run }
             val entrances = listOf("fadeIn", "slideUp", "zoom", "popIn", "wipe")
             val add = m.scenes.mapIndexedNotNull { i, sc ->
                 val a = imgs.getOrNull(i) ?: return@mapIndexedNotNull null
@@ -776,8 +805,17 @@ class DirectorController(
             pendingProject = p
             update { copy(problems = probs + musicNotes, working = false, readyToApply = true,
                 status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "Flow images lag gaye — " + add.size + "/" + m.scenes.size + " scenes")) }
+            // Round 13 — ASSEMBLER agent analyses each placed image with the vision model (FIT / NOT FIT).
+            if (services.can(Capability.IMAGE_UNDERSTANDING)) {
+                val verdicts = add.take(5).map { a ->
+                    val sc = m.scenes.firstOrNull { it.id == a.sceneId }
+                    val v = if (sc != null) services.visionVerdict(a.localPath, sc.visualObjective, sc.narration).getOrNull() else null
+                    "• scene ${m.scenes.indexOf(sc) + 1}: " + (v ?: "unverified (no vision)")
+                }
+                if (verdicts.isNotEmpty()) say("🔍 ASSEMBLER agent ne Flow images analyse ki (vision):\n" + verdicts.joinToString("\n").take(700))
+            }
             say("✅ " + add.size + " Flow image(s) ko scenes pe fix kar diya (order mein, scene 1 se). Code animations inke upar play hongi. “Add to timeline” dabao.")
-        } }
+        }
     }
 
     // ---------------- apply / revise ----------------

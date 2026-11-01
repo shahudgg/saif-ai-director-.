@@ -79,7 +79,7 @@ import com.example.studio.director.WebResearch
 private val Bg = Color(0xFF09080E); private val Glass = Color(0xFF17131F); private val Purple = Color(0xFF7B2BFF); private val Cyan = Color(0xFF00E5FF)
 
 @Composable
-fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
+fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, autoAgentGoal: String? = null) {
     val ui by controller.ui.collectAsStateWithLifecycle()
     val activity by controller.activity.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
@@ -93,6 +93,11 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
     val listState = rememberLazyListState()
     val scrollScope = androidx.compose.runtime.rememberCoroutineScope()
     BackHandler(onBack = onClose)
+    // Round 13: floating-AI / StudioLaunch can hand a goal straight to the SAIF Agent crew.
+    LaunchedEffect(autoAgentGoal) {
+        val g = autoAgentGoal
+        if (!g.isNullOrBlank() && !ui.working) controller.agentRun(g)
+    }
     LaunchedEffect(ui.turns.size) {
         if (ui.turns.size > 1) listState.animateScrollToItem(ui.turns.size - 1 + if (wf == DirectorWorkflow.ZERO_TO_VIDEO) 1 else 0)
     }
@@ -192,6 +197,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showBatch = true }) { Text("🖼 Flow images") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showFlowSetup = true }) { Text("🌐 Flow browser") }
             if (ui.awaitingBriefConfirm && !ui.working) Button(enabled = !checkingMusic, onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
             if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(enabled = !checkingMusic, onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
             if (ui.readyToApply && !ui.working) Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
@@ -209,7 +215,7 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit) {
                 }
             }) { Text("Voiceover script") }
             if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::strengthenHook) { Text("Stronger hook") }
-            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::refreshAssets) { Text("Check Telegram again") }
+            if (ui.manifest != null && (ui.readyToApply || ui.applied) && !ui.working) OutlinedButton(enabled = !checkingMusic, onClick = controller::attachFlowImages) { Text("🖼 Flow images lagao") }
             if (ui.applied) OutlinedButton(onClick = onClose) { Text("Back to timeline") }
             if (!ui.working) TextButton(enabled = !checkingMusic, onClick = controller::resetConversation) { Text("New chat", color = Color(0xFF9E95AC)) }
         }

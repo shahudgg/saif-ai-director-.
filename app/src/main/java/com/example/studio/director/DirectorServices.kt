@@ -205,6 +205,26 @@ class DirectorServices(private val context: Context, private val activity: Agent
         }
     }
 
+    /** Round 13 — ASSEMBLER agent's eyes: does this image fit this scene? One-line FIT / NOT FIT verdict. */
+    suspend fun visionVerdict(imagePath: String, sceneObjective: String, narration: String): Result<String> {
+        val prof = AiProfile.fromSettings(context)
+        if (!can(Capability.IMAGE_UNDERSTANDING) || prof.apiKey.isBlank()) return Result.failure(IllegalStateException("no vision provider configured"))
+        val b64 = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val src = android.graphics.BitmapFactory.decodeFile(imagePath) ?: return@runCatching null
+                val maxE = maxOf(src.width, src.height).coerceAtLeast(1)
+                val scale = 640f / maxE
+                val bmp = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(src, (src.width * scale).toInt().coerceAtLeast(1), (src.height * scale).toInt().coerceAtLeast(1), true) else src
+                val bos = java.io.ByteArrayOutputStream()
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, bos)
+                android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            }.getOrNull()
+        } ?: return Result.failure(IllegalStateException("unreadable image"))
+        return AiClient(prof).callWithImages(LlmRole.REVIEWER,
+            "Does this image fit a video scene with objective: \" + sceneObjective.take(140) + \" and narration: \" + narration.take(140) + \"? Reply in ONE line: FIT or NOT FIT — short reason.",
+            b64)
+    }
+
     /** A stronger opening line than [current], or a failure explaining why nothing changed. */
     suspend fun betterHook(b: DirectorBrief, current: String): Result<String> {
         val pipeline = ScriptPipeline(ask = { p -> llm(p, maxTokens = 600, traceKind = ActivityKind.SCRIPT, traceTitle = "Hook options") }, guard = { ModelOutputGuard.reason(it, b.narrationLanguage) })

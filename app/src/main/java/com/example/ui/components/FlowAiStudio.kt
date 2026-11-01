@@ -376,6 +376,8 @@ fun FlowAssetToolsDialog(onDismiss: () -> Unit) {
                             }
                             if (a.type == "image") {
                                 TextButton(enabled = !busy, onClick = { editTarget = a; editPrompt = "" }) { Text("🪄 AI edit", fontSize = 10.sp) }
+                                // Round 13: one-tap glow/animated-keyframe look via the image model
+                                TextButton(enabled = !busy, onClick = { editTarget = a; editPrompt = "Add a premium neon glow around the main subject plus a subtle rim light, like an animated key visual. Keep the composition, colours and subject identical. No text, no watermark." }) { Text("✨ Glow", fontSize = 10.sp) }
                                 TextButton(enabled = !busy, onClick = { cropTarget = a }) { Text("✂️ Crop", fontSize = 10.sp) }
                             }
                             TextButton(enabled = !busy, onClick = { FlowAssetStore.remove(ctx, a.fileId); refresh() }) { Text("🗑", fontSize = 10.sp) }
