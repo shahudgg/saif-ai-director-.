@@ -153,6 +153,7 @@ object FlowDownloader {
                     return null
                 }
             }
+            runCatching { com.example.power.SaifToolkit.Counters.bump(ctx, "flow_images") }
             FlowLibrary.add(ctx, FlowRecord(
                 id = "FLOW_" + hash.take(12).ifBlank { System.currentTimeMillis().toString() },
                 title = safeTitle.ifBlank { "Flow image ${promptIndex + 1}" },

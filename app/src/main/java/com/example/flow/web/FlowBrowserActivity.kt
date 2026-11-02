@@ -2,11 +2,14 @@ package com.example.flow.web
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -158,6 +161,26 @@ private fun FlowBrowserScreen(projectId: String, autostart: Boolean, seedTopic: 
     var aiVerify by remember { mutableStateOf(FlowSettings.aiVerify(ctx)) }
     var delayMs by remember { mutableStateOf(FlowSettings.delayMs(ctx)) }
 
+    // Round 15 SAFETY NET: if Google refuses WebView sign-in entirely, the owner can generate the pictures
+    // in Chrome and import them here — the rest of the pipeline (verify → plan → timeline) is identical.
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val rec = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: return@runCatching null
+                    FlowDownloader.saveBytes(
+                        ctx, bytes, -1, "", FlowRoles.BACKGROUND,
+                        "imported_" + System.currentTimeMillis(), uri.toString(), "image", strict = false
+                    )
+                }.getOrNull()
+            }
+            com.example.power.SaifToolkit.Counters.bump(ctx, "flow_images")
+            Toast.makeText(ctx, if (rec != null) "Image library mein add ho gayi" else "Import fail (file padhi nahi ja saki)", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun persist(p: FlowPlan) {
         plan = p
         FlowPlanStore.save(ctx, p)
@@ -266,6 +289,19 @@ private fun FlowBrowserScreen(projectId: String, autostart: Boolean, seedTopic: 
                             Text("Import page", fontSize = 10.sp)
                         }
                     }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            runCatching {
+                                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(FLOW_HOME)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                            showMenu = false
+                        }) { Text("Chrome mein kholo", fontSize = 10.sp) }
+                        OutlinedButton(onClick = { showMenu = false; importLauncher.launch("image/*") }) {
+                            Text("Gallery se import", fontSize = 10.sp)
+                        }
+                    }
+                    Text("Flow WebView mein login na ho to Chrome se images banao aur yahan import karo — verify/plan/timeline sab same chalega.",
+                        color = Color(0xFF9E95AC), fontSize = 9.sp, lineHeight = 12.sp)
                     TextButton(onClick = { showMenu = false; showTermux = true }) { Text("🖥 Termux / commands", fontSize = 11.sp) }
                     TextButton(onClick = { showMenu = false; session.reload() }) { Text("Reload page", fontSize = 11.sp) }
                 }

@@ -192,14 +192,36 @@ object FlowJs {
   }
 
   S.resolveBlob = function(url, token){
+    function done(dataUrl, mime, w, h){
+      try { sendB64(String(token), mime || 'image/png', 'grabbed_media', w || 0, h || 0, String(dataUrl || ''), -1); } catch(e) {}
+    }
+    function viaXhr(){
+      try {
+        var x = new XMLHttpRequest();
+        x.open('GET', url, true);
+        x.responseType = 'blob';
+        x.onload = function(){
+          if (x.status >= 200 && x.status < 300 && x.response) {
+            var fr = new FileReader();
+            fr.onload = function(){ done(fr.result, x.response.type); };
+            fr.readAsDataURL(x.response);
+          } else { try { SaifFlow.onLog('grab failed http ' + x.status); } catch(e) {} }
+        };
+        x.onerror = function(){ try { SaifFlow.onLog('grab network error'); } catch(e) {} };
+        x.send();
+      } catch(e) { try { SaifFlow.onLog('grab exception'); } catch(e2) {} }
+    }
     try {
-      fetch(url).then(function(r){ return r.blob(); }).then(function(b){
+      fetch(url, { credentials: 'include' }).then(function(r){
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.blob();
+      }).then(function(b){
         var fr = new FileReader();
-        fr.onload = function(){ sendB64(String(token), b.type || 'image/png', 'blob_media', 0, 0, String(fr.result || ''), -1); };
+        fr.onload = function(){ done(fr.result, b.type); };
         fr.readAsDataURL(b);
-      }).catch(function(){ try { SaifFlow.onLog('blob read failed'); } catch(e) {} });
+      }).catch(function(){ viaXhr(); });
       return 'ok';
-    } catch(e) { return 'fail'; }
+    } catch(e) { viaXhr(); return 'ok'; }
   };
 
   function report(u, mime, el, w, h, pIdx){
@@ -210,9 +232,24 @@ object FlowJs {
     return true;
   }
 
+  // Open shadow roots hide Flow's result tiles on some builds: walk them too (depth limited).
+  function collectMedia(root, out, depth){
+    if (!root || depth > 3) return out;
+    try {
+      var list = root.querySelectorAll ? root.querySelectorAll('img,video') : [];
+      for (var i = 0; i < list.length; i++) out.push(list[i]);
+      var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (var j = 0; j < all.length; j++) {
+        var el = all[j];
+        if (el && el.shadowRoot) collectMedia(el.shadowRoot, out, depth + 1);
+      }
+    } catch(e) {}
+    return out;
+  }
+
   S.scan = function(force){
     var found = 0;
-    var imgs = document.querySelectorAll('img,video');
+    var imgs = collectMedia(document, [], 0);
     for (var i = 0; i < imgs.length; i++) {
       var e = imgs[i];
       var tag = e.tagName;
@@ -234,6 +271,23 @@ object FlowJs {
       if (S.base[u]) continue;
       if (report(u, tag === 'VIDEO' ? 'video' : 'image', e, w, h, S.promptIndex)) found++;
     }
+    // Result tiles painted as CSS backgrounds (newer Flow builds do this instead of <img>).
+    var bgEls = document.querySelectorAll('[style*="background-image"]');
+    for (var b = 0; b < bgEls.length; b++) {
+      var bd = bgEls[b];
+      var rr3 = bd.getBoundingClientRect ? bd.getBoundingClientRect() : null;
+      if (!rr3 || rr3.width < 240 || rr3.height < 240) continue;
+      if (inChrome(bd)) continue;
+      var bi = bd.style && bd.style.backgroundImage;
+      if (!bi) { try { bi = getComputedStyle(bd).backgroundImage; } catch(e) { bi = ''; } }
+      var mm = /url\(["']?(.*?)["']?\)/.exec(bi || '');
+      if (!mm) continue;
+      var bu = abs(mm[1]);
+      if (!bu || badUrl(bu)) continue;
+      if (S.base[bu] || S.seen[bu]) continue;
+      if (report(bu, 'image', bd, Math.round(rr3.width), Math.round(rr3.height), S.promptIndex)) found++;
+    }
+
     // Canvas-rendered results (some Flow variants paint the result on a canvas)
     var canvases = document.querySelectorAll('canvas');
     for (var c = 0; c < canvases.length; c++) {

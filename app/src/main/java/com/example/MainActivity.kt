@@ -74,22 +74,26 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
-            // Request runtime notification permission on Android 13+
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                val notifLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                    contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-                ) { granted ->
-                    android.util.Log.d("MainActivity", "Notification permission: $granted")
-                }
-                LaunchedEffect(Unit) {
-                    if (androidx.core.content.ContextCompat.checkSelfPermission(
-                            this@MainActivity,
-                            android.Manifest.permission.POST_NOTIFICATIONS
-                        ) != android.content.pm.PackageManager.PERMISSION_GRANTED
-                    ) {
-                        notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                }
+            // Round 15 — runtime permissions that features actually need.
+            // RECORD_AUDIO was NEVER requested before, which is the main reason the purple-mic live
+            // baatcheet stayed silent (AudioRecord fails → "could not start the microphone").
+            val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+            ) { result ->
+                android.util.Log.d("MainActivity", "Permissions: $result")
+            }
+            LaunchedEffect(Unit) {
+                val needed = ArrayList<String>()
+                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                        this@MainActivity, android.Manifest.permission.RECORD_AUDIO
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) needed.add(android.Manifest.permission.RECORD_AUDIO)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        this@MainActivity, android.Manifest.permission.POST_NOTIFICATIONS
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                if (needed.isNotEmpty()) permissionLauncher.launch(needed.toTypedArray())
             }
 
             val themeMode by ThemeManager.themeMode.collectAsState()

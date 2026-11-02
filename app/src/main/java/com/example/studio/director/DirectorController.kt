@@ -984,6 +984,7 @@ class DirectorController(
             throw e
         }
         update { copy(applied = true, readyToApply = false) }
+        runCatching { com.example.power.SaifToolkit.Counters.bump(appContext, "videos_applied") }
         say("Added to your timeline. Press Play in the editor to preview. You can reopen this chat any time to revise scenes.")
     }
 

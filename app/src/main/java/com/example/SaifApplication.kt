@@ -14,6 +14,8 @@ class SaifApplication : Application() {
         ProviderSettingsManager.init(this)
         // Round 14: backup providers (auto-switch when a provider hits its limit).
         com.example.llm.BackupProviders.init(this)
+        // Round 15: record every uncaught crash to disk so Power Tools can show the real trace.
+        com.example.power.CrashGuard.install(this)
 
         // Round 10: pre-load the on-device speech model at app start, so the purple-mic live baatcheet
         // works with ANY provider key. Cloud STT exists only for Groq/OpenAI/Gemini keys; for every

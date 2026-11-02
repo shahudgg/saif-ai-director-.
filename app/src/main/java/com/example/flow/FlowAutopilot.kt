@@ -224,9 +224,23 @@ class FlowAutopilot(
             FlowDownloader.noteError("Blob picture could not be read from the page")
             return null
         }
-        return FlowDownloader.download(
+        val direct = FlowDownloader.download(
             context, media.url, cookie, slot.index, slot.sceneId, slot.role,
             "scene_${slot.index + 1}_${slot.role}"
         )
+        if (direct != null) return direct
+        // Round 15 FALLBACK: signed Flow URLs and hotlink protection reject a bare HTTP client, so the
+        // page itself is asked to fetch the picture (credentials included) and stream it back as base64.
+        val grabbed = runCatching { driver.resolveBlob(media.url) }.getOrNull()
+        if (!grabbed.isNullOrBlank()) {
+            val bytes = runCatching { android.util.Base64.decode(grabbed, android.util.Base64.DEFAULT) }.getOrNull()
+            if (bytes != null && bytes.isNotEmpty()) {
+                return FlowDownloader.saveBytes(
+                    context, bytes, slot.index, slot.sceneId, slot.role,
+                    "scene_${slot.index + 1}_${slot.role}", media.url, "image", strict = false
+                )
+            }
+        }
+        return null
     }
 }
