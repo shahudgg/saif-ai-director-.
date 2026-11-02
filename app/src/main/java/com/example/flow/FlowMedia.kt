@@ -314,7 +314,8 @@ object FlowImageProbe {
         } else 0f
         val brightness = mean.toFloat()
         val needsGlow = brightness < 0.24f || contrast < 0.12f
-        val glowStrength = if (!needsGlow) 0f else (0.30f - brightness).coerceIn(0.06f, 0.30f) + (0.12f - contrast).coerceAtLeast(0f) * 0.5f
+        val glowStrength: Float = if (!needsGlow) 0f else
+            (0.30f - brightness).coerceIn(0.06f, 0.30f) + ((0.12 - contrast).coerceAtLeast(0.0) * 0.5).toFloat()
         val wantsCutout = role == FlowRoles.STICKER || role == FlowRoles.KEYFRAME
         val needsBgRemove = wantsCutout && cornerEqual
         val fit = when {
@@ -344,8 +345,8 @@ object FlowImageProbe {
         }
         return FlowReview(
             width = fullW, height = fullH, cropLoss = cropLoss,
-            focalX = focalX, focalY = focalY, brightness = brightness, contrast = contrast,
-            sharpness = sharpness, cornerUniform = cornerEqual, paletteHex = palette,
+            focalX = focalX, focalY = focalY, brightness = brightness, contrast = contrast.toFloat(),
+            sharpness = sharpness.toFloat(), cornerUniform = cornerEqual, paletteHex = palette,
             fit = fit,
             cropX = ((focalX - 0.5f) * cropLoss * 2f).coerceIn(-0.22f, 0.22f),
             cropY = ((focalY - 0.5f) * cropLoss * 2f).coerceIn(-0.22f, 0.22f),

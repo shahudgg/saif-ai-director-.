@@ -66,6 +66,7 @@ object TermuxBridge {
             putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", sessionAction)
         }
         context.startService(intent)
+        Unit
     }.recoverCatching { e ->
         throw IllegalStateException(
             "Termux ne command accept nahi kiya (${e.message}). Termux mein ~/.termux/termux.properties kholo aur " +

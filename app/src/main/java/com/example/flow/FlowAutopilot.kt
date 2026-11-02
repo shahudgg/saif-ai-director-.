@@ -207,7 +207,7 @@ class FlowAutopilot(
         return null
     }
 
-    private fun saveCaptured(media: FlowCaptured, slot: FlowSlot): FlowRecord? {
+    private suspend fun saveCaptured(media: FlowCaptured, slot: FlowSlot): FlowRecord? {
         val b64 = media.base64
         if (!b64.isNullOrBlank()) {
             val bytes = runCatching { android.util.Base64.decode(b64, android.util.Base64.DEFAULT) }.getOrNull()
