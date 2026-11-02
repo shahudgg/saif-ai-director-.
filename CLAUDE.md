@@ -163,7 +163,10 @@ transitions pixels se plan hokar timeline pe lagein.* See `docs/ROUND_14_REPORT.
 - **Termux:** `termux/TermuxBridge` (RUN_COMMAND + app-shell fallback + presets) inside the browser's ⋮ menu; manifest gained
   `com.termux.permission.RUN_COMMAND` + package queries.
 - Tests: `app/src/test/java/com/example/flow/FlowPipelineTest.kt` (rules, plan JSON, transitions, placement, prompt planner).
-  Not compiled here (no JDK/SDK); injected JS was syntax-checked with `node --check`.
+- **CI green:** run `41458827378` (commit `ef3d334`) → BUILD SUCCESSFUL + unit tests passed; APK on release tag `saif-ai-apk`
+  (`app-debug.apk`, 2026-11-02 14:21Z). First compile caught 8 errors in the new code (Float/Double mixing in `FlowImageProbe.measure`,
+  a `suspend` call inside `saveCaptured`, `startService` returning `ComponentName?` instead of `Unit`) — all fixed.
+  Nothing else was compiled locally (no JDK/SDK in the sandbox); injected JS was syntax-checked with `node --check`.
 
 **Round 13 (this ZIP)** — multi-agent SAIF crew + Flow-only assets, per the reference video: (A) Flow browser reopen fixed (always-available 🌐 button), (B) Telegram asset fetching REMOVED from the video pipeline (assets = Flow AI images + AI-generated key visuals), (C) supervised multi-agent orchestration, (D) vision analysis of placed images, (E) floating-AI "video banao <topic>" → phone agent runs the crew.
 
