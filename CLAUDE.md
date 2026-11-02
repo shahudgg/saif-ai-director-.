@@ -144,6 +144,16 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
+**Round 15** — live voice actually works now (RECORD_AUDIO was never requested), plus Power Tools (15 tools) and a
+hardened Flow capture/download path. Report: `docs/ROUND_15_REPORT.md`; build: CI run 41487833948, commit `4fbfc1f`.
+- **Live voice root cause:** `MainActivity` only asked for POST_NOTIFICATIONS, so the mic never opened and the session
+  died silently. Now: RECORD_AUDIO + notifications requested at startup *and* gated again in `SaifLiveModeSheet`
+  (`startWithMic`), with a visible `liveError` card (Retry / settings) and `connectionStatus` line on the orb.
+- **Power Tools (🧰 in the header):** self test (13 checks, exportable), crash log, API-key test, model browser,
+  storage manager, SRT/VTT export, shot-list CSV, cover maker, Flow library dedupe, prompt vault, voice studio,
+  Flow resume, batch picture fixer, provider health, usage analytics.
+- **Flow:** shadow-DOM + CSS-background capture, page-side `fetch` download fallback, auto "open project" nudge,
+  Chrome-open / gallery-import escape hatches.
 **Round 14 (this ZIP)** — the Flow browser is rebuilt around the owner's exact wording: *login jab chaho, scroll/zoom chale,
 profile photo asset na bane, prompts script se banein, 8 s gap pe generate, download + verify (crop/glow/background), phir
 transitions pixels se plan hokar timeline pe lagein.* See `docs/ROUND_14_REPORT.md`.

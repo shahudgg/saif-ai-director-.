@@ -77,3 +77,19 @@ real APIs in this repo — no mock data.
   That is exactly what Power Tools exists for: run **Self test**, then share the report/crash log.
 - The Vosk model downloads on first use; until it does, live STT depends on a cloud STT-capable key
   (Groq/OpenAI/Gemini). The self-test shows this state explicitly.
+
+---
+
+## 5. Build status (Round 15 final)
+- CI run **41487833948** on commit `4fbfc1f` → **success** (`:app:assembleDebug`).
+- APK: `https://github.com/shahudgg/saif-ai-director-./releases/download/saif-ai-apk/app-debug.apk`
+  (80.7 MB, refreshed 2026-11-02).
+- Two compile errors found by the first CI pass and fixed in `4fbfc1f`:
+  - `FlowBrowserActivity` used `FlowDownloader.saveBytes` without the `com.example.flow.FlowDownloader` import.
+  - `CrashGuard` compared `Thread.UncaughtExceptionHandler` with the object (`previous !== this`, illegal types).
+- Extra hardening in the same commit:
+  - `FlowJs.NEW_PROJECT` + `FlowDriver.openProject()` — Flow's dashboard has no prompt box; the autopilot now
+    clicks the "new project / start / create" control every ~25 s while waiting, and the browser menu has a
+    manual **Project kholo** button.
+  - Fixed doubled backslashes inside the injected JS (URL-regex for CSS `background-image`, and the
+    `[role="button"]` selector) so the capture script actually matches on the page.
