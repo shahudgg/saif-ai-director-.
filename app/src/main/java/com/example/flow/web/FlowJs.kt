@@ -399,6 +399,30 @@ object FlowJs {
 
     val PAGE_INFO = STATE
 
+    /**
+     * Round 15 — Flow often lands on the dashboard without a prompt box; a project has to be opened first.
+     * This clicks the most likely "new project / start / create" control when no composer exists, so the
+     * autopilot is not stuck waiting on a page that can never accept a prompt.
+     */
+    val NEW_PROJECT = """
+(function(){
+  var S = window.__saifFlow || {};
+  var c = S.composer ? S.composer() : null;
+  if (c) return 'already';
+  var rx = /(new project|create project|start a project|start creating|create video|new video|generate video|start|create|shuru)/i;
+  var els = document.querySelectorAll('button,a,[role="button"]');
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!el || el.disabled) continue;
+    var t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+    if (!t || t.length > 40) continue;
+    if (!rx.test(t)) continue;
+    try { el.click(); return 'clicked:' + t.slice(0, 24); } catch(e) {}
+  }
+  return 'notfound';
+})();
+"""
+
     val CLEAR_STORAGE = """
 (function(){
   try { window.localStorage.clear(); } catch(e) {}

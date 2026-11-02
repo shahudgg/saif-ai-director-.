@@ -68,6 +68,7 @@ import com.example.flow.FLOW_HOME
 import com.example.flow.FX_HOME
 import com.example.flow.FlowAutopilot
 import com.example.flow.FlowBridgeBus
+import com.example.flow.FlowDownloader
 import com.example.flow.FlowCaptured
 import com.example.flow.FlowLibrary
 import com.example.flow.FlowPhase
@@ -288,6 +289,12 @@ private fun FlowBrowserScreen(projectId: String, autostart: Boolean, seedTopic: 
                         OutlinedButton(onClick = { session.importPageNow { n -> Toast.makeText(ctx, "$n media mile — library check karo", Toast.LENGTH_SHORT).show() } }) {
                             Text("Import page", fontSize = 10.sp)
                         }
+                        OutlinedButton(onClick = {
+                            scope.launch {
+                                val ok = runCatching { session.openProject() }.getOrDefault(false)
+                                Toast.makeText(ctx, if (ok) "Project khol diya" else "Project button nahi mila — page pe khud khol lo", Toast.LENGTH_SHORT).show()
+                            }
+                        }) { Text("Project kholo", fontSize = 10.sp) }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = {

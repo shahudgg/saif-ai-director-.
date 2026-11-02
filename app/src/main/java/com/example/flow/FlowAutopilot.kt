@@ -37,6 +37,8 @@ interface FlowDriver {
     /** Cookies for the exact media host (googleusercontent and flow.google.com differ). */
     suspend fun cookieFor(url: String): String = cookieHeader()
     suspend fun resolveBlob(url: String): String? = null
+    /** True when a "new project / start" control was clicked (Flow needs a project before a composer exists). */
+    suspend fun openProject(): Boolean = false
 }
 
 /**
@@ -100,9 +102,15 @@ class FlowAutopilot(
                 state(FlowPhase.WAITING_LOGIN, done, total,
                     "Flow login chahiye (ya create page kholo). Browser mein login karo — SAIF khud shuru kar dega.", false)
                 val waitStart = System.currentTimeMillis()
+                var lastNudge = 0L
                 while (!info.hasComposer) {
                     currentCoroutineContext().ensureActive()
                     if (stopped) { state(FlowPhase.STOPPED, done, total, "Stopped by you."); return current }
+                    // Every ~25 s, try to open a Flow project so a prompt box appears (dashboard pages have none).
+                    if (System.currentTimeMillis() - lastNudge > 25_000L) {
+                        lastNudge = System.currentTimeMillis()
+                        runCatching { driver.openProject() }
+                    }
                     if (System.currentTimeMillis() - waitStart > 20 * 60 * 1000L) {
                         state(FlowPhase.FAILED, done, total,
                             "Flow 20 minute tak ready nahi hua — login karke dobara Start dabao (kuch bhi delete nahi hua).", false)

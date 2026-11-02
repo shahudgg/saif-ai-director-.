@@ -30,7 +30,7 @@ object CrashGuard {
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             runCatching { write(app, thread, error) }
             // Never swallow the crash: let the platform (or the previous handler) do its job.
-            if (previous != null && previous !== this) {
+            if (previous != null) {
                 previous.uncaughtException(thread, error)
             } else {
                 android.os.Process.killProcess(android.os.Process.myPid())

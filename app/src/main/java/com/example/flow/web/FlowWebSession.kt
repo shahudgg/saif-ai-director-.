@@ -353,6 +353,11 @@ class FlowWebSession(private val context: Context) : FlowDriver {
 
     override suspend fun cookieFor(url: String): String = runCatching { cookies.getCookie(url) ?: "" }.getOrDefault("")
 
+    override suspend fun openProject(): Boolean {
+        val r = eval(FlowJs.NEW_PROJECT)
+        return r != null && r.contains("clicked")
+    }
+
     override suspend fun resolveBlob(url: String): String? {
         val wv = webView ?: return null
         val id = "b" + token.incrementAndGet()
