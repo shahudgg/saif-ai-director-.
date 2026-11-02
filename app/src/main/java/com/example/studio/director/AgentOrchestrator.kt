@@ -13,7 +13,7 @@ import kotlinx.coroutines.ensureActive
  * stuck/glitched step never silently kills the video. Every handoff is logged to the shared
  * [AgentActivity] bus, so the user can watch the agents talk to each other live in the chat panel.
  */
-enum class AgentRole { PLANNER, SCRIPT, ASSET, ASSEMBLER, PLACER, WATCHDOG }
+enum class AgentRole { PLANNER, SCRIPT, ASSET, ASSEMBLER, PLACER, WATCHDOG, FLOW, VERIFY }
 
 class AgentOrchestrator(private val activity: AgentActivity?) {
 

@@ -53,7 +53,16 @@ class DirectorServices(private val context: Context, private val activity: Agent
                 ms.map { m -> ProviderRegistry.fromProfile(profile, true, m).copy(apiKey = k) }
             }
         }
-        return chatEntries + listOf(ProviderRegistry.deviceSpeech(), ProviderRegistry.webSearch(WebResearch.isConfigured(context), WebResearch.provider(context)))
+        // Round 14: saved backup providers join the chain, so a quota/auth error on the main provider
+        // falls through to a different provider + key + model instead of failing the whole job.
+        val backups = runCatching {
+            com.example.llm.BackupProviders.candidates().mapNotNull { (bp, key) ->
+                val p = ProviderProfile.getById(bp.provider)
+                val m = bp.model.ifBlank { p.defaultFallbackModels.firstOrNull() ?: "default" }
+                ProviderRegistry.fromProfile(p, true, m).copy(apiKey = key)
+            }
+        }.getOrDefault(emptyList())
+        return chatEntries + backups + listOf(ProviderRegistry.deviceSpeech(), ProviderRegistry.webSearch(WebResearch.isConfigured(context), WebResearch.provider(context)))
     }
 
     fun can(c: Capability) = ProviderRegistry.route(providers(), c) is RouteResult.Routed
@@ -75,7 +84,9 @@ class DirectorServices(private val context: Context, private val activity: Agent
                 var traceId: Long? = null
                 val r = try {
                     val base = AiProfile.fromSettings(context)
-                    val callProfile = if (it.apiKey.isNotBlank()) AiProfile(provider = base.provider, apiKey = it.apiKey, activeModel = it.model.ifBlank { base.activeModel }, customBaseUrl = base.customBaseUrl) else base
+                    // Use the chain entry's OWN provider (a backup may be a different vendor).
+                    val callProfile = if (it.apiKey.isNotBlank()) AiProfile(provider = it.id, apiKey = it.apiKey,
+                        activeModel = it.model.ifBlank { base.activeModel }, customBaseUrl = base.customBaseUrl) else base
                     val response = AiClient(callProfile).call(
                         role, prompt, system, maxTokens = budget,
                         onChunk = { chunk -> traceId?.let { id -> activity?.append(id, chunk) } },
@@ -203,6 +214,48 @@ class DirectorServices(private val context: Context, private val activity: Agent
             val arr = JSONObject(cleaned).optJSONArray("prompts") ?: throw IllegalStateException("The agent returned no prompt list: " + raw.take(100))
             (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.length > 10 }.take(n)
         }
+    }
+
+    /**
+     * Round 14 — the real Flow plan: ONE prompt per scene, built from the approved script (not the topic),
+     * plus key-visual prompts where a cut-out helps. Saved by the controller and executed in the browser.
+     */
+    suspend fun buildFlowPlan(projectId: String, b: DirectorBrief, m: SceneManifest, script: String): Result<com.example.flow.FlowPlan> {
+        val planner = com.example.flow.FlowPromptPlanner(ask = { p ->
+            llm(p, role = LlmRole.PLANNER, system = "You are SAIF, the image director. Reply with strict JSON only.",
+                maxTokens = 6000, traceKind = ActivityKind.SCRIPT, traceTitle = "Scene image prompts")
+        })
+        return planner.build(
+            projectId = projectId,
+            topic = b.prompt.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().ifBlank { b.prompt },
+            aspect = b.aspect ?: "9:16",
+            style = b.style ?: "cinematic explainer",
+            manifest = m,
+            script = script
+        )
+    }
+
+    /**
+     * Round 14 — the FIT check used by the Flow browser: the local measurements travel WITH the picture,
+     * so the model judges what the frame really is, not a guess.
+     */
+    suspend fun flowVerdict(imagePath: String, slotPrompt: String, localVerdict: String): Result<String> {
+        val prof = AiProfile.fromSettings(context)
+        if (!can(Capability.IMAGE_UNDERSTANDING) || prof.apiKey.isBlank()) return Result.failure(IllegalStateException("no vision provider configured"))
+        val b64 = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val src = android.graphics.BitmapFactory.decodeFile(imagePath) ?: return@runCatching null
+                val maxE = maxOf(src.width, src.height).coerceAtLeast(1)
+                val scale = 640f / maxE
+                val bmp = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(src, (src.width * scale).toInt().coerceAtLeast(1), (src.height * scale).toInt().coerceAtLeast(1), true) else src
+                val bos = java.io.ByteArrayOutputStream()
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos)
+                android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+            }.getOrNull()
+        } ?: return Result.failure(IllegalStateException("unreadable image"))
+        return AiClient(prof).callWithImages(LlmRole.REVIEWER,
+            "This picture was generated for: \"" + slotPrompt.take(200) + "\". Local measurements: " + localVerdict.take(160) +
+                ". Reply in ONE short line: FIT or NOT FIT — max 12 words.", b64)
     }
 
     /** Round 13 — ASSEMBLER agent's eyes: does this image fit this scene? One-line FIT / NOT FIT verdict. */

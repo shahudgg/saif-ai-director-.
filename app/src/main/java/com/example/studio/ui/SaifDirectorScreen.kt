@@ -135,16 +135,27 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
             }
         }
 
-        // Round 12 — one-time Flow setup banner (the video's "browser button" at the top of zero-to-video)
-        if (wf == DirectorWorkflow.ZERO_TO_VIDEO && com.example.ui.components.FlowAssetStore.count(ctx) == 0) {
+        // Round 14 — Flow status card. Login is NEVER a one-time lock: the browser opens any time and the
+        // session stays signed in until the owner logs out.
+        if (wf == DirectorWorkflow.ZERO_TO_VIDEO) {
+            val plan = ui.flowPlan ?: remember(ui.manifest?.scenes?.size) { com.example.flow.FlowPlanStore.load(ctx, controller.projectId) }
+            val ready = plan?.finishedCount ?: 0
+            val total = plan?.slots?.size ?: 0
             Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp), shape = RoundedCornerShape(12.dp), color = Color(0xFF1D1430), border = BorderStroke(1.dp, Color(0x557B2BFF))) {
                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("1️⃣", fontSize = 16.sp)
+                    Text("🌐", fontSize = 16.sp)
                     Column(Modifier.weight(1f)) {
-                        Text("One-time setup: Google Flow mein login karo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Browser kholo, flow.google.com pe Gmail se login karo — baad mein SAIF Agent wahin se topic ke liye saari images 8-8 second ke gap mein bana lega aur yahin download karega.", color = Color(0xFF9E95AC), fontSize = 10.sp, lineHeight = 13.sp)
+                        Text(if (total > 0) "Flow: $ready/$total pictures ready" else "Flow browser • login jab chaho",
+                            color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (total > 0) "Har picture scene-wise verify hui hai (crop / glow / background / sharpness). 'Flow images lagao' se timeline pe aayengi."
+                            else "Script approve karo → SAIF har scene ke liye image prompt banayega → browser mein ek-ek karke 8s gap pe generate + download + verify hoga. Login kabhi bhi, kitni bhi baar.",
+                            color = Color(0xFF9E95AC), fontSize = 10.sp, lineHeight = 13.sp)
                     }
-                    OutlinedButton(onClick = { showFlowSetup = true }) { Text("Open browser", fontSize = 10.sp) }
+                    OutlinedButton(onClick = {
+                        if (ui.manifest != null && (plan == null || plan.slots.isEmpty())) controller.prepareFlowPlan(true)
+                        else com.example.flow.web.FlowBrowserActivity.start(ctx, controller.projectId, false, ui.brief.prompt)
+                    }) { Text(if (ui.manifest != null && (plan == null || plan.slots.isEmpty())) "Prompts banao" else "Browser", fontSize = 10.sp) }
                 }
             }
         }
@@ -196,8 +207,10 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
-            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showBatch = true }) { Text("🖼 Flow images") }
-            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showFlowSetup = true }) { Text("🌐 Flow browser") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest != null) OutlinedButton(onClick = { controller.prepareFlowPlan(true) }) { Text("🖼 Flow images (auto)") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = {
+                com.example.flow.web.FlowBrowserActivity.start(ctx, controller.projectId, false, ui.brief.prompt)
+            }) { Text("🌐 Flow browser") }
             if (ui.awaitingBriefConfirm && !ui.working) Button(enabled = !checkingMusic, onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
             if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(enabled = !checkingMusic, onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
             if (ui.readyToApply && !ui.working) Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
@@ -229,11 +242,18 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
     }
     if (showSettings) KeysDialog(onDismiss = { showSettings = false })
     if (showAgent) AgentDialog(onDismiss = { showAgent = false }, onRun = { goal -> showAgent = false; controller.agentRun(goal) })
-    if (showFlowSetup) com.example.ui.components.FlowAiBrowserDialog(onDismiss = { showFlowSetup = false })
-    if (showBatch) com.example.ui.components.FlowBatchDialog(
-        topic = ui.brief.prompt.ifBlank { input }.ifBlank { "short explainer video" },
-        aspect = ui.brief.aspect ?: "9:16", style = ui.brief.style ?: "",
-        onDismiss = { showBatch = false }, onDone = { controller.attachFlowImages() })
+    if (showFlowSetup) {
+        LaunchedEffect(showFlowSetup) {
+            com.example.flow.web.FlowBrowserActivity.start(ctx, controller.projectId, false, ui.brief.prompt)
+            showFlowSetup = false
+        }
+    }
+    if (showBatch) {
+        LaunchedEffect(showBatch) {
+            controller.prepareFlowPlan(true)
+            showBatch = false
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -333,9 +353,9 @@ private fun KeysDialog(onDismiss: () -> Unit) {
                 OutlinedTextField(searchKey, { searchKey = it }, label = { Text("$provider search API key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 OutlinedTextField(tg, { tg = it }, label = { Text("Telegram bot token (asset library)") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 Text("Status: search ${if (WebResearch.isConfigured(ctx)) "configured" else "not set"}, Telegram ${if (WebResearch.telegramToken(ctx).isNotBlank()) "configured" else "not set"}, AI images ${if (com.example.llm.ImageGen.canGenerate(com.example.studio.ai.AiProfile.fromSettings(ctx).provider, com.example.studio.ai.AiProfile.fromSettings(ctx).apiKey)) "available with your ${com.example.studio.ai.AiProfile.fromSettings(ctx).provider} key" else "need a Gemini/OpenAI/OpenRouter key in Settings"}", fontSize = 11.sp)
-                // Round 10: in-app Flow AI browser (login once) + AI asset tools over imported images.
+                // Round 14: full-screen Flow browser (login any time) + AI asset tools over imported images.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { showFlow = true }) { Text("🌐 Flow AI browser", fontSize = 11.sp) }
+                    OutlinedButton(onClick = { showFlow = true }) { Text("🌐 Flow browser (full screen)", fontSize = 11.sp) }
                     OutlinedButton(onClick = { showTools = true }) { Text("🖼 AI asset tools (${com.example.ui.components.FlowAssetStore.count(ctx)})", fontSize = 11.sp) }
                 }
                 ProductionOptions()
@@ -346,7 +366,12 @@ private fun KeysDialog(onDismiss: () -> Unit) {
                 val ok2 = tg.isBlank() || WebResearch.saveTelegramToken(ctx, tg)
                 Toast.makeText(ctx, if (ok1 && ok2) "Saved securely" else "Secure storage unavailable on this device — nothing was saved", Toast.LENGTH_LONG).show(); onDismiss() }) { Text("Save") } },
             dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
-        if (showFlow) com.example.ui.components.FlowAiBrowserDialog(onDismiss = { showFlow = false })
+        if (showFlow) {
+            LaunchedEffect(showFlow) {
+                com.example.flow.web.FlowBrowserActivity.start(ctx, "", false, "")
+                showFlow = false
+            }
+        }
         if (showTools) com.example.ui.components.FlowAssetToolsDialog(onDismiss = { showTools = false })
     }
 }

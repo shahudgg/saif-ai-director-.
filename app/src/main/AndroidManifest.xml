@@ -42,6 +42,9 @@
     <!-- Package installer permission required for on-device APK testing in SAIF AI Studio -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Round 14: optional Termux bridge (owner runs ffmpeg / file commands from the app) -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
     <queries>
         <!-- Targeted package queries for JARVIS assistant deep-linking (replaces broad QUERY_ALL_PACKAGES) -->
         <package android:name="com.google.android.youtube" />
@@ -52,6 +55,8 @@
         <package android:name="com.android.chrome" />
         <package android:name="com.google.android.apps.maps" />
         <package android:name="com.google.android.gm" />
+        <package android:name="com.termux" />
+        <package android:name="com.termux.api" />
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
@@ -98,6 +103,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Round 14: REAL full-screen Flow browser (window, not dialog → scrolling/zoom/keyboard work) -->
+        <activity
+            android:name=".flow.web.FlowBrowserActivity"
+            android:exported="false"
+            android:label="SAIF Flow Browser"
+            android:theme="@style/Theme.FlowBrowser"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode" />
         <activity
             android:name=".AssistantOverlayActivity"
             android:exported="true"
