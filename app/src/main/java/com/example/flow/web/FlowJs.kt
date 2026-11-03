@@ -545,6 +545,292 @@ object FlowJs {
 })();
 """
 
+    /**
+     * ROUND 15.3 -- WHERE IS THE ARROW? (pure geometry scan; returns coordinates, clicks nothing).
+     *
+     * The build-15.2 screenshot proved the JS-side synthetic click does NOT reach Flow's send control
+     * (log kept saying "arrow confirm nahi hua"). So we stop trusting synthetic DOM events: this scan
+     * only reports the viewport coordinates of the square-ish icon button hugging the composer's
+     * bottom-right corner (plus the raw composer corner as fallback). Kotlin then fires REAL
+     * MotionEvents there -- the same thing the owner's finger does, which Flow cannot tell apart.
+     */
+    val FIND_SEND = """
+(function(){
+  var S = window.__saifFlow || {};
+  if (!S || !S.composer) return { ok: false, reason: 'nosetup' };
+  var c = S.composer();
+  if (!c) return { ok: false, reason: 'nocomposer' };
+  var cr = c.getBoundingClientRect();
+  function label(el){
+    if (!el || !el.getAttribute) return '';
+    return ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+            (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-testid') || '') + ' ' +
+            (el.getAttribute('aria-description') || '')).toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+  function box(el){
+    try { return el.getBoundingClientRect(); } catch(e) { return null; }
+  }
+  function usable(el, r){
+    if (!el || !r) return false;
+    if (el.disabled) return false;
+    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return false;
+    if (r.width < 14 || r.height < 14) return false;
+    if (r.width > 320 || r.height > 200) return false;
+    if (r.bottom < 0) return false;
+    return true;
+  }
+  var nodes = document.querySelectorAll('button,[role="button"],div[role="button"],span[role="button"],a[role="button"],svg');
+  var best = null, bestScore = 0, list = [];
+  for (var i = 0; i < nodes.length; i++) {
+    var raw = nodes[i];
+    var el = raw;
+    if (raw.closest) {
+      var up = raw.closest('button,[role="button"],a[role="button"]');
+      if (up) el = up;
+    }
+    var r = box(el);
+    if (!usable(el, r)) continue;
+    var t = label(el);
+    if (/(cancel|close|delete|remove|upload|attach|setting|mic|record|download|share|copy|undo|redo)/.test(t)) continue;
+    var score = 0;
+    if (/(send|submit|generate|arrow|create|start|run|go\b)/.test(t)) score += 14;
+    var dx = Math.abs((r.left + r.width / 2) - (cr.right - 30));
+    var dy = Math.abs((r.top + r.height / 2) - (cr.bottom - 26));
+    if (dx < 120 && dy < 130) score += 14;
+    if (r.left > cr.left + cr.width * 0.5) score += 4;
+    if (el.querySelector && el.querySelector('svg')) score += 3;
+    if (raw.tagName && String(raw.tagName).toLowerCase() === 'svg') score += 2;
+    if (Math.abs(r.width - r.height) < Math.max(8, r.width * 0.3)) score += 4;
+    if (!t && el.querySelector && el.querySelector('svg,img')) score += 2;
+    if (score <= 3) continue;
+    var item = { x: r.left + r.width / 2, y: r.top + r.height / 2, name: (t || 'btn').slice(0, 22), score: score };
+    list.push(item);
+    if (score > bestScore) { bestScore = score; best = item; }
+  }
+  list.sort(function(a, b){ return b.score - a.score; });
+  var out = {
+    ok: !!best,
+    x: best ? best.x : (cr.right - 30),
+    y: best ? best.y : (cr.bottom - 26),
+    name: best ? best.name : 'fallback-corner',
+    score: bestScore,
+    alt: list.slice(0, 4),
+    corner: { x: cr.right - 30, y: cr.bottom - 26 },
+    composer: { x: cr.left, y: cr.top, w: cr.width, h: cr.height }
+  };
+  return out;
+})();
+"""
+
+    /** ROUND 15.3 -- type the prompt only (no click, no Enter). Returns ok / nocomposer / nosetup. */
+    val TYPE_PROMPT = """
+(function(text){
+  var S = window.__saifFlow || {};
+  if (!S || !S.setPrompt) return 'nosetup';
+  var c = S.composer ? S.composer() : null;
+  if (!c) return 'nocomposer';
+  var ok = false;
+  try { ok = !!S.setPrompt(String(text)); } catch(e) { ok = false; }
+  return ok ? 'ok' : 'nocomposer';
+})(%s);
+"""
+
+    /** ROUND 15.3 -- JS-only click of the best-scored send control (secondary fallback only). */
+    val CLICK_SEND = """
+(function(){
+  var S = window.__saifFlow;
+  if (!S || !S.clickGenerate) return 'nosetup';
+  try { return S.clickGenerate() ? 'ok:gen' : 'fail'; } catch(e) { return 'fail'; }
+})();
+"""
+
+    /** ROUND 15.3 -- pick Flow's own aspect-ratio control (9:16 / 16:9 / 1:1 ...). */
+    val SET_ASPECT = """
+(function(aspect){
+  var want = String(aspect || '9:16').replace(/\s/g, '');
+  var map = {
+    '9:16': ['9:16', '9 / 16', 'portrait', 'vertical'],
+    '16:9': ['16:9', '16 / 9', 'landscape', 'widescreen'],
+    '1:1': ['1:1', 'square'],
+    '4:5': ['4:5', '4 / 5'],
+    '3:4': ['3:4', '3 / 4']
+  };
+  var keys = map[want] || [want];
+  function norm(t){ return String(t || '').toLowerCase().replace(/\s/g, '').replace(/\//g, ''); }
+  var els = document.querySelectorAll('button,[role="button"],[role="radio"],[aria-label],[data-value]');
+  for (var k = 0; k < keys.length; k++) {
+    var key = norm(keys[k]);
+    if (!key) continue;
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (!el || el.disabled) continue;
+      var r = el.getBoundingClientRect();
+      if (!r || r.width < 8 || r.height < 8 || r.width > 420) continue;
+      var t = norm((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+                   (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-value') || ''));
+      if (t.indexOf(key) < 0) continue;
+      var pressed = (el.getAttribute('aria-pressed') === 'true') || (el.getAttribute('aria-checked') === 'true');
+      if (pressed) return 'already:' + keys[k];
+      try { el.click(); return 'ok:' + keys[k]; } catch(e) {}
+    }
+  }
+  return 'notfound';
+})(%s);
+"""
+
+    /** ROUND 15.3 -- open the model / images-per-run chip that sits next to the composer. */
+    val OPEN_COUNT_MENU = """
+(function(){
+  var S = window.__saifFlow || {};
+  var c = S.composer ? S.composer() : null;
+  if (!c) return 'nocomposer';
+  var cr = c.getBoundingClientRect();
+  function txt(el){
+    return ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+            (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-testid') || ''))
+            .toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+  var els = document.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup],div[role="button"]');
+  var best = null, bestScore = 0;
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!el || el.disabled) continue;
+    var r = el.getBoundingClientRect();
+    if (!r || r.width < 30 || r.height < 14 || r.width > 340) continue;
+    var t = txt(el);
+    if (!t) continue;
+    var score = 0;
+    if (/(x\s?2|x\s?3|x\s?4|x2|x3|x4)/.test(t)) score += 12;
+    if (/(nano|banana|imagen|veo|model|imagine)/.test(t)) score += 9;
+    if (r.top > cr.top - 110 && r.bottom < cr.bottom + 110) score += 7;
+    if (el.getAttribute('aria-haspopup')) score += 3;
+    if (score <= 5) continue;
+    if (score > bestScore) { bestScore = score; best = el; }
+  }
+  if (!best) return 'notfound';
+  var br = best.getBoundingClientRect();
+  var label = txt(best).slice(0, 40);
+  try { best.click(); } catch(e) {}
+  return 'ok:' + Math.round(br.left + br.width / 2) + ':' + Math.round(br.top + br.height / 2) + ':' + label;
+})();
+"""
+
+    /** ROUND 15.3 -- choose "1" (one image per run) inside the chip menu that OPEN_COUNT_MENU opened. */
+    val PICK_ONE_IMAGE = """
+(function(cx, cy){
+  cx = Number(cx) || 0; cy = Number(cy) || 0;
+  var els = document.querySelectorAll('[role="menuitem"],[role="option"],li,button,[role="button"],div[role="menuitemradio"]');
+  var cands = [];
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!el || el.disabled) continue;
+    var r = el.getBoundingClientRect();
+    if (!r || r.width < 18 || r.height < 12 || r.height > 220) continue;
+    if (r.bottom < 0 || r.top > (window.innerHeight || 3000)) continue;
+    var t = ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+             (el.getAttribute('title') || '')).replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 30) continue;
+    var low = t.toLowerCase();
+    var score = 0;
+    if (low === '1' || low === 'x1' || low === 'one') score += 14;
+    if (/^1\s?(image|photo|picture|result)s?/.test(low)) score += 12;
+    if (/(one image|1 image|x1|only one)/.test(low)) score += 10;
+    if (score === 0) continue;
+    if (el.closest('[role="menu"],[role="listbox"],[role="dialog"],[role="menu-item"]')) score += 8;
+    var dx = Math.abs((r.left + r.width / 2) - cx);
+    var dy = Math.abs((r.top + r.height / 2) - cy);
+    if (dx < 300 && dy < 420) score += 6;
+    cands.push({ el: el, t: t.slice(0, 24), score: score });
+  }
+  cands.sort(function(a, b){ return b.score - a.score; });
+  if (!cands.length) return 'notfound';
+  try { cands[0].el.click(); } catch(e) {}
+  return 'ok:' + cands[0].t;
+})(%1, %2);
+"""
+
+    /** ROUND 15.3 -- scroll the composer into view, drop IME focus and un-block stray "can make mistakes" banners before the real tap. */
+    val PREPARE_SEND = """
+(function(){
+  var S = window.__saifFlow || {};
+  var c = S.composer ? S.composer() : null;
+  if (!c) return 'nocomposer';
+  try { c.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch(e) {}
+  try {
+    if (document.activeElement && document.activeElement !== document.body && document.activeElement.blur) {
+      document.activeElement.blur();
+    }
+  } catch(e) {}
+  try { c.blur(); } catch(e) {}
+  try {
+    var junk = document.querySelectorAll('[role="status"],[aria-live="polite"],[aria-live="assertive"]');
+    for (var i = 0; i < junk.length; i++) {
+      var t = (junk[i].innerText || '').toLowerCase();
+      if (t.indexOf('mistake') >= 0 || t.indexOf('beta') >= 0 || t.indexOf('experiment') >= 0) {
+        junk[i].style.pointerEvents = 'none';
+      }
+    }
+  } catch(e) {}
+  var r = c.getBoundingClientRect();
+  return (r && r.width > 40) ? 'ok' : 'hidden';
+})();
+"""
+
+    /** ROUND 15.3 -- open Flow settings (aspect ratio / output) so SET_ASPECT can pick the ratio the owner chose. */
+    val OPEN_SETTINGS = """
+(function(){
+  var els = document.querySelectorAll('button,[role="button"],[aria-haspopup],[aria-label],[title]');
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!el || el.disabled) continue;
+    var r = el.getBoundingClientRect();
+    if (!r || r.width < 12 || r.height < 12 || r.width > 400) continue;
+    if (r.top < 0 || r.bottom > (window.innerHeight || 4000)) continue;
+    var t = ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '') + ' ' +
+             ((el.innerText || '').slice(0, 60))).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (/setting|aspect|ratio|size|format|output/.test(t)) {
+      try { el.click(); } catch(e) {}
+      return 'ok:' + t.slice(0, 32);
+    }
+  }
+  return 'notfound';
+})();
+"""
+
+    /** ROUND 15.3 -- close any popup/menu we opened, without touching the composer text. */
+    val CLOSE_MENUS = """
+(function(){
+  try {
+    ['keydown', 'keyup'].forEach(function(k){
+      document.body.dispatchEvent(new KeyboardEvent(k, { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+    });
+  } catch(e) {}
+  return 'ok';
+})();
+"""
+
+    /** ROUND 15.3 -- read the model/output chip text (used to verify "1 image" really got picked). */
+    val CHIP_STATE = """
+(function(){
+  var S = window.__saifFlow || {};
+  var c = S.composer ? S.composer() : null;
+  if (!c) return 'nocomposer';
+  var cr = c.getBoundingClientRect();
+  var els = document.querySelectorAll('button,[role="button"],div[role="button"],span[role="button"]');
+  var out = [];
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    var r = el.getBoundingClientRect();
+    if (!r || r.width < 20 || r.height < 12 || r.width > 320) continue;
+    if (r.top < cr.top - 120 || r.bottom > cr.bottom + 120) continue;
+    var t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 40) continue;
+    out.push(t);
+  }
+  return out.slice(0, 6).join(' | ');
+})();
+"""
+
     val CLEAR_STORAGE = """
 (function(){
   try { window.localStorage.clear(); } catch(e) {}

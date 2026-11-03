@@ -58,6 +58,19 @@ interface FlowDriver {
         val ok = submit(prompt)
         return FlowSubmitResult(clicked = ok, confirmed = false, how = if (ok) "legacy" else "none")
     }
+
+    /**
+     * ROUND 15.3 — tap the arrow again on an already-typed prompt (never re-types it).
+     * The real driver fires a genuine MotionEvent at the arrow's own coordinates.
+     */
+    suspend fun pressSend(): FlowSubmitResult =
+        FlowSubmitResult(clicked = false, confirmed = false, how = "nosupport")
+
+    /** ROUND 15.3 — pick Flow's own aspect-ratio control before generating. */
+    suspend fun setAspect(aspect: String): Boolean = false
+
+    /** ROUND 15.3 — switch Flow to one image per run ("1 image at a time"). */
+    suspend fun setOneImage(): Boolean = false
 }
 
 /**
@@ -93,6 +106,9 @@ class FlowAutopilot(
     private var current: FlowPlan = plan
     /** How many times one prompt is re-sent while the page has not confirmed the click. */
     private val MAX_SUBMIT_TRIES = 3
+
+    /** ROUND 15.3 — Flow's own output settings are applied once per run (aspect + 1 image). */
+    private var settingsDone = false
 
     fun stop() { stopped = true }
 
@@ -141,25 +157,36 @@ class FlowAutopilot(
                     info = safeInfo()
                 }
             }
+            // ---- 1b. ROUND 15.3: Flow ke apne output settings (aspect + 1 image per run) ----
+            if (!settingsDone) {
+                settingsDone = true
+                val aspect = current.aspect.ifBlank { "9:16" }
+                state(FlowPhase.GENERATING, done, total,
+                    "Flow settings set ho rahi hain (" + aspect + " · 1 image per run)…")
+                val okAspect = runCatching { driver.setAspect(aspect) }.getOrDefault(false)
+                val okOne = runCatching { driver.setOneImage() }.getOrDefault(false)
+                state(FlowPhase.GENERATING, done, total,
+                    "Flow settings: " + aspect + (if (okAspect) " ✓" else " (manual)") +
+                        " · 1 image" + (if (okOne) " ✓" else " (manual)"))
+            }
             // ---- 2. run the prompt ----
             val running = existing.copy(status = FlowSlotStatus.RUNNING, tries = existing.tries + 1, error = "")
             current = current.withSlot(running)
             onPlan(current)
             driver.arm(slot.index)
             // ---- ROUND 15.1: press the arrow, verify the page took it, retry while it has not ----
-            var send = FlowSubmitResult()
-            for (attempt in 1..MAX_SUBMIT_TRIES) {
+            var send = runCatching { driver.submitSmart(running.prompt) }.getOrElse { FlowSubmitResult() }
+            var attempt = 1
+            while (!send.confirmed && attempt < MAX_SUBMIT_TRIES) {
                 currentCoroutineContext().ensureActive()
                 if (stopped) { state(FlowPhase.STOPPED, done, total, "Stopped by you."); return current }
-                send = runCatching { driver.submitSmart(running.prompt) }.getOrElse { FlowSubmitResult() }
-                if (send.clicked && send.confirmed) break
-                if (attempt < MAX_SUBMIT_TRIES) {
-                    state(FlowPhase.GENERATING, done, total,
-                        "Arrow confirm nahi hua — dobara bhej raha hoon (" + attempt + "/" + MAX_SUBMIT_TRIES + ")")
-                    // Re-arm so the retry cannot pick up the previous attempt's frame.
-                    runCatching { driver.arm(slot.index) }
-                    delay(1800L)
-                }
+                attempt++
+                state(FlowPhase.GENERATING, done, total,
+                    "Arrow confirm nahi hua — dobara tap kar raha hoon (" + (attempt - 1) + "/" + (MAX_SUBMIT_TRIES - 1) + ")")
+                delay(1500L)
+                // Re-arm so the retry cannot pick up the previous attempt's frame. The prompt is NOT re-typed.
+                runCatching { driver.arm(slot.index) }
+                send = runCatching { driver.pressSend() }.getOrElse { FlowSubmitResult() }
             }
             val submitted = send.clicked
             state(FlowPhase.GENERATING, done, total,

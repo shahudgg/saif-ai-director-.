@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -39,6 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -342,30 +345,198 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         return r != null && r.contains("ok")
     }
 
-    /** ROUND 15.1 — press the arrow and WAIT for the page to confirm it took the prompt. */
+    // ------------------------------------------------------- ROUND 15.3 · REAL TAPS
+
+    /**
+     * ROUND 15.3 — the arrow, for real this time.
+     *
+     * Why the previous approaches failed: Flow's send arrow is a plain icon button that ignores
+     * synthetic `click()` / pointer events (React listens for real pointer input), and the soft
+     * keyboard kept the composer half-scrolled so a stale coordinate missed. So:
+     *
+     *  1. PREPARE_SEND scrolls the composer into view, blurs the IME and un-blocks the
+     *     "Google Flow can make mistakes" status banner,
+     *  2. FIND_SEND reports the live viewport coordinates of the square-ish icon button in the
+     *     composer's bottom-right corner (plus the raw corner as a fallback),
+     *  3. Kotlin converts those CSS pixels to device pixels with the WebView's own scale and
+     *     dispatches a real DOWN → MOVE → UP sequence through `dispatchTouchEvent` — this is
+     *     pixel-for-pixel what the owner's finger does,
+     *  4. confirmation is read from the page (composer cleared / busy / new <img>), never assumed.
+     *
+     * A JS click is only a secondary fallback, and the prompt is typed exactly once — retries
+     * re-tap, they never re-type.
+     */
     override suspend fun submitSmart(prompt: String): FlowSubmitResult {
-        val before = genState()
-        val js = FlowJs.SUBMIT_V2.replace("%s", JSONObject.quote(prompt))
-        val raw = eval(js)
-        val how = raw?.trim()?.trim('"').orEmpty()
-        if (!how.contains("ok:")) {
-            return FlowSubmitResult(clicked = false, confirmed = false, how = "none",
-                detail = if (raw == null) "page not ready" else how.take(60))
+        val typed = eval(FlowJs.TYPE_PROMPT.replace("%s", JSONObject.quote(prompt)))
+        val typedOk = typed != null && typed.contains("ok")
+        if (!typedOk) {
+            _log.value = (_log.value + "\nPrompt box nahi mila — Flow page ready nahi hai.").trim()
+            return FlowSubmitResult(clicked = false, confirmed = false, how = "nocomposer")
         }
-        val label = how.substringAfter("ok:", "").take(48)
-        var confirmed = false
-        var i = 0
-        while (i < 9 && !confirmed) {
-            i++
-            delay(1400)
+        delay(500L)
+        return pressSend()
+    }
+
+    /** Press the arrow on an already-typed prompt. Safe to call repeatedly. */
+    override suspend fun pressSend(): FlowSubmitResult {
+        val before = genState()
+        runCatching { eval(FlowJs.PREPARE_SEND) }
+        delay(700L)
+        var spot = findSendSpot()
+        if (spot == null && before == null) {
+            return FlowSubmitResult(clicked = false, confirmed = false, how = "page-not-ready")
+        }
+        val targets = ArrayList<Pair<Double, Double>>()
+        if (spot != null && spot.ok && spot.x > 1 && spot.y > 1) targets.add(spot.x to spot.y)
+        if (spot != null && spot.cornerX > 1 && spot.cornerY > 1) {
+            targets.add(spot.cornerX to spot.cornerY)
+            targets.add((spot.cornerX - 14) to (spot.cornerY - 10))
+        }
+        var tried = 0
+        var how = "none"
+        for (target in targets) {
+            tried++
+            how = "tap:" + (spot?.name ?: "corner")
+            val tapped = tapAt(target.first, target.second)
+            if (!tapped) continue
+            if (waitConfirm(before, 8_000L)) {
+                _log.value = (_log.value + "\nArrow dab gaya ✓ · " + how).trim()
+                return FlowSubmitResult(clicked = true, confirmed = true, how = how)
+            }
+            // Secondary: JS click on the best-scored control (harmless if the tap already worked).
+            val js = eval(FlowJs.CLICK_SEND)
+            if (js != null && js.contains("ok") && waitConfirm(before, 4_500L)) {
+                _log.value = (_log.value + "\nArrow dab gaya ✓ · tap + js").trim()
+                return FlowSubmitResult(clicked = true, confirmed = true, how = "tap+js")
+            }
+            if (tried >= 2) break
+            spot = findSendSpot() ?: spot
+        }
+        _log.value = (_log.value + "\nArrow tap bheja, page ne abhi confirm nahi kiya — picture ka wait kar raha hoon.").trim()
+        return FlowSubmitResult(clicked = tried > 0, confirmed = false, how = how)
+    }
+
+    private data class SendSpot(
+        val x: Double,
+        val y: Double,
+        val cornerX: Double,
+        val cornerY: Double,
+        val name: String,
+        val score: Int,
+        val ok: Boolean
+    )
+
+    /** evaluateJavascript returns a JSON string; it may be quoted depending on the JS return type. */
+    private fun unquoteJson(raw: String): String {
+        val t = raw.trim()
+        if (!t.startsWith("\"")) return t
+        return runCatching { JSONArray("[$t]").optString(0) }.getOrDefault(t.trim('"'))
+    }
+
+    private suspend fun findSendSpot(): SendSpot? {
+        val raw = eval(FlowJs.FIND_SEND) ?: return null
+        return runCatching {
+            val o = JSONObject(unquoteJson(raw))
+            val corner = o.optJSONObject("corner")
+            SendSpot(
+                x = o.optDouble("x", 0.0),
+                y = o.optDouble("y", 0.0),
+                cornerX = corner?.optDouble("x", 0.0) ?: 0.0,
+                cornerY = corner?.optDouble("y", 0.0) ?: 0.0,
+                name = o.optString("name", ""),
+                score = o.optInt("score", 0),
+                ok = o.optBoolean("ok")
+            )
+        }.getOrNull()
+    }
+
+    /** A REAL finger-style tap at CSS (x, y): DOWN → MOVE → UP through the WebView touch pipeline. */
+    private suspend fun tapAt(xCss: Double, yCss: Double): Boolean = withContext(Dispatchers.Main.immediate) {
+        val wv = webView ?: return@withContext false
+        runCatching {
+            val density = context.resources.displayMetrics.density
+            val zoom = if (wv.scale > 0.05f) wv.scale else density
+            val x = (xCss * zoom).toFloat().coerceAtLeast(2f)
+            val y = (yCss * zoom).toFloat().coerceAtLeast(2f)
+            wv.requestFocus()
+            val t0 = SystemClock.uptimeMillis()
+            fun fire(action: Int, dt: Long, px: Float, py: Float) {
+                val ev = MotionEvent.obtain(t0, t0 + dt, action, px, py, 0)
+                try { wv.dispatchTouchEvent(ev) } finally { ev.recycle() }
+            }
+            fire(MotionEvent.ACTION_DOWN, 0L, x, y)
+            delay(45L)
+            fire(MotionEvent.ACTION_MOVE, 22L, x + 0.6f, y + 0.4f)
+            delay(40L)
+            fire(MotionEvent.ACTION_UP, 70L, x + 0.8f, y + 0.6f)
+            true
+        }.getOrDefault(false)
+    }
+
+    private suspend fun waitConfirm(before: GenState?, windowMs: Long): Boolean {
+        var waited = 0L
+        while (waited < windowMs) {
+            delay(1_100L)
+            waited += 1_100L
             val now = genState() ?: continue
             val wasLen = before?.value?.length ?: 0
-            val cleared = wasLen > 8 && now.value.length < wasLen / 2
-            val grew = now.images > (before?.images ?: 0)
-            if (cleared || grew || now.busy) confirmed = true
+            if (wasLen > 8 && now.value.length < wasLen / 2) return true
+            val wasImages = before?.images ?: Int.MAX_VALUE
+            if (now.images > wasImages) return true
+            if (now.busy) return true
         }
-        _log.value = (_log.value + "\n" + (if (confirmed) "send ok" else "send unconfirmed") + " · " + label.take(40)).trim()
-        return FlowSubmitResult(clicked = true, confirmed = confirmed, how = label, detail = "")
+        return false
+    }
+
+    // ------------------------------------------------- ROUND 15.3 · Flow's own settings
+
+    /** Pick Flow's aspect ratio. Returns true only when the control reported success. */
+    override suspend fun setAspect(aspect: String): Boolean {
+        runCatching { eval(FlowJs.PREPARE_SEND) }
+        delay(250L)
+        val opened = runCatching { eval(FlowJs.OPEN_SETTINGS) }.getOrNull().let { it != null && it.contains("ok") }
+        delay(900L)
+        val raw = runCatching { eval(FlowJs.SET_ASPECT.replace("%s", JSONObject.quote(aspect))) }.getOrNull()
+        val res = raw?.let { unquoteJson(it) }.orEmpty()
+        val ok = res.startsWith("ok") || res.startsWith("already")
+        if (!ok) runCatching { eval(FlowJs.CLOSE_MENUS) }
+        delay(300L)
+        val aspectNote = when {
+            ok && opened -> "set ✓"
+            ok -> "set ✓ (seedha)"
+            else -> "control nahi mila — manual"
+        }
+        _log.value = (_log.value + "\nFlow aspect " + aspect + ": " + aspectNote).trim()
+        return ok
+    }
+
+    /** Switch Flow to ONE image per run ("1 image at a time"). */
+    override suspend fun setOneImage(): Boolean {
+        runCatching { eval(FlowJs.PREPARE_SEND) }
+        delay(250L)
+        val opened = runCatching { eval(FlowJs.OPEN_COUNT_MENU) }.getOrNull().let { it != null && it.contains("ok:") }
+        if (!opened) {
+            _log.value = (_log.value + "\nFlow output chip nahi mila — 1-image setting manual.").trim()
+            return false
+        }
+        val parts = unquoteJson(opened).split(":")
+        val cx = parts.getOrNull(1)?.toDoubleOrNull() ?: 0.0
+        val cy = parts.getOrNull(2)?.toDoubleOrNull() ?: 0.0
+        delay(800L)
+        val pickJs = FlowJs.PICK_ONE_IMAGE.replace("%1", cx.toString()).replace("%2", cy.toString())
+        val picked = runCatching { eval(pickJs) }.getOrNull().let { it != null && it.contains("ok:") }
+        delay(600L)
+        runCatching { eval(FlowJs.CLOSE_MENUS) }
+        delay(300L)
+        val chip = runCatching { eval(FlowJs.CHIP_STATE) }.getOrNull()?.let { unquoteJson(it) }.orEmpty()
+        val verified = picked && Regex("(^|[^0-9])x?1([^0-9]|$)").containsMatchIn(chip)
+        val oneNote = when {
+            verified -> "set ✓"
+            picked -> "chuna, chip: " + chip.take(30)
+            else -> "option nahi mila — manual"
+        }
+        _log.value = (_log.value + "\nFlow 1-image: " + oneNote).trim()
+        return verified || picked
     }
 
     private suspend fun genState(): GenState? {
@@ -377,6 +548,7 @@ class FlowWebSession(private val context: Context) : FlowDriver {
     }
 
     private data class GenState(val value: String, val busy: Boolean, val images: Int, val hasComposer: Boolean)
+
 
     override suspend fun submit(prompt: String): Boolean {
         val quoted = JSONObject.quote(prompt)
