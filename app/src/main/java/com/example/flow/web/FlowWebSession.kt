@@ -392,6 +392,13 @@ class FlowWebSession(private val context: Context) : FlowDriver {
             targets.add(spot.cornerX to spot.cornerY)
             targets.add((spot.cornerX - 14) to (spot.cornerY - 10))
         }
+        if (targets.isEmpty()) {
+            // Nothing to tap (composer hidden) — one JS attempt, then report honestly.
+            val js = eval(FlowJs.CLICK_SEND)
+            val ok = js != null && js.contains("ok")
+            val confirmed = ok && waitConfirm(before, 6_000L)
+            return FlowSubmitResult(clicked = ok, confirmed = confirmed, how = if (ok) "js" else "no-arrow")
+        }
         var tried = 0
         var how = "none"
         for (target in targets) {
