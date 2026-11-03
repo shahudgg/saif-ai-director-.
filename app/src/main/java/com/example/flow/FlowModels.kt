@@ -47,7 +47,11 @@ data class FlowSlot(
     val imageUrl: String = "",
     val imageHash: String = "",
     val review: FlowReview? = null,
-    val error: String = ""
+    val error: String = "",
+    /** ROUND 15.2 — transparent PNG produced locally by [FlowCutout] (empty = background not removed). */
+    val cutPath: String = "",
+    /** Dominant border colour measured while cutting out (kept for the chroma fallback). */
+    val borderHex: String = ""
 ) {
     val done: Boolean get() = status == FlowSlotStatus.VERIFIED || status == FlowSlotStatus.DOWNLOADED
 }
@@ -152,6 +156,7 @@ object FlowJson {
         put("status", s.status.name); put("tries", s.tries)
         put("imagePath", s.imagePath); put("imageUrl", s.imageUrl); put("imageHash", s.imageHash)
         put("error", s.error)
+        put("cut", s.cutPath); put("border", s.borderHex)
         s.review?.let { put("review", reviewToJson(it)) }
     }
 
@@ -169,7 +174,9 @@ object FlowJson {
         imageUrl = o.optString("imageUrl"),
         imageHash = o.optString("imageHash"),
         review = o.optJSONObject("review")?.let { reviewFromJson(it) },
-        error = o.optString("error")
+        error = o.optString("error"),
+        cutPath = o.optString("cut"),
+        borderHex = o.optString("border")
     )
 
     fun reviewToJson(r: FlowReview): JSONObject = JSONObject().apply {

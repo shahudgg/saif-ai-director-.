@@ -98,8 +98,10 @@ object FlowPlacement {
 
     fun forSlot(slot: FlowSlot, sceneDurationMs: Long, transitionType: String): AssetPlacement {
         val r = slot.review ?: FlowReview()
-        val sticker = slot.role == FlowRoles.STICKER || (slot.role == FlowRoles.KEYFRAME && r.cornerUniform)
-        val cutout = slot.role == FlowRoles.KEYFRAME && r.needsBgRemove
+        // A real transparent PNG is a cut-out — no key colour needed, and it must float above the backdrop.
+        val realCut = slot.cutPath.isNotBlank()
+        val sticker = realCut || slot.role == FlowRoles.STICKER || (slot.role == FlowRoles.KEYFRAME && r.cornerUniform)
+        val cutout = !realCut && slot.role == FlowRoles.KEYFRAME && r.needsBgRemove
         val base = if (sticker) {
             AssetPlacement(
                 x = 0.5f + r.cropX, y = 0.42f + r.cropY,

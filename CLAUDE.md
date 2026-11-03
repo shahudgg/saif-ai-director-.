@@ -154,6 +154,9 @@ build exactly and adds only the two fixes that were actually asked for. Whole Ro
   took the prompt; `FlowDriver.submitSmart` → `FlowSubmitResult(clicked, confirmed)` and the autopilot re-sends up
   to 3× while unconfirmed. No other behaviour of Round 15 changed.
 - `FlowBrowserActivity` gets an `autofinish` extra so the finished plan is applied and the browser closes itself.
+- **Round 15.2** — background removal is back as a local, self-contained fix: `flow/FlowCutout.kt` (flood-fill
+  cut-out → `*_cut.png`), `FlowSlot.cutPath/borderHex`, autopilot step 4b, `FlowPlacement` treats a real cut-out as
+  a transparent overlay (chroma key off), controller feeds the cut-out PNG to the timeline. Nothing else moved.
 **Round 15** — live voice actually works now (RECORD_AUDIO was never requested), plus Power Tools (15 tools) and a
 hardened Flow capture/download path. Report: `docs/ROUND_15_REPORT.md`; build: CI run 41487833948, commit `4fbfc1f`.
 - **Live voice root cause:** `MainActivity` only asked for POST_NOTIFICATIONS, so the mic never opened and the session

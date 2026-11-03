@@ -113,5 +113,14 @@ The Round-16 attempt was rejected (too much had changed). The tree is back to ex
    - autopilot re-sends up to 3 times while unconfirmed, and says "send unconfirmed" in the log instead of pretending.
 3. `autofinish` makes the browser close itself after the run and the director apply the pictures to the timeline.
 
-Everything else — LayerPlanner, FlowCutout background removal, SceneAnimPlanner, FinalQcAgent, the 🚀 button and the
-0.52→0.24 scrim change — was **removed** because the owner asked for the previous build back.
+**Round 15.2** adds the third fix the owner asked for on top of 15.1:
+
+4. **Background removal actually happens.** New `flow/FlowCutout.kt`: dominant border colour → 4-neighbour flood
+   fill (auto-raised tolerance for green/blue screens) → 1-px feather → transparent `*_cut.png`. The autopilot runs
+   it for every cut-out slot (keyframe / sticker) right after the download, `FlowSlot.cutPath` stores the result,
+   `FlowPlacement` then places it as a real transparent overlay (no guessed key colour) and the controller feeds
+   that PNG to the timeline. When the picture has no flat background the cut-out is skipped and the original photo
+   is used — nothing is silently destroyed.
+
+Everything else — LayerPlanner, SceneAnimPlanner, FinalQcAgent, the 🚀 button and the 0.52→0.24 scrim change —
+stays **removed**, because the owner asked for the previous build back.

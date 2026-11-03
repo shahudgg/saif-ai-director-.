@@ -857,7 +857,13 @@ class DirectorController(
         run {
             update { copy(working = true, flowPlan = plan) }
             status(DirectorStage.CHECKING_ASSETS, "Flow pictures ko scene-wise lagaya ja raha hai")
-            val usable = plan.slots.filter { it.imagePath.isNotBlank() && File(it.imagePath).exists() }
+            // ROUND 15.2: a slot is usable when its downloaded picture OR its local transparent cut-out exists.
+            fun slotPath(slot: com.example.flow.FlowSlot): String {
+                if (slot.cutPath.isNotBlank() && File(slot.cutPath).exists()) return slot.cutPath
+                if (slot.imagePath.isNotBlank() && File(slot.imagePath).exists()) return slot.imagePath
+                return ""
+            }
+            val usable = plan.slots.filter { slotPath(it).isNotBlank() }
             if (usable.isEmpty()) {
                 update { copy(working = false) }
                 say("Flow plan mein abhi koi downloaded picture nahi hai — browser mein Start dabao. Kuch bhi delete nahi hua.", error = true)
@@ -880,12 +886,17 @@ class DirectorController(
             val add = usable.map { slot ->
                 val transition = transitionsByScene[slot.sceneId]?.type ?: "fade"
                 val placement = com.example.flow.FlowPlacement.forSlot(slot, slot.sceneMs, transition)
+                val path = slotPath(slot)
+                val cut = slot.cutPath.isNotBlank() && path == slot.cutPath
                 ResolvedAsset(
                     sceneId = slot.sceneId, requestId = "flow-" + slot.index, kind = "image",
-                    localPath = slot.imagePath, source = "flow-ai:" + (slot.review?.paletteHex ?: ""),
+                    localPath = path, source = "flow-ai:" + (slot.review?.paletteHex ?: ""),
                     verified = true,
-                    note = slot.role + " · " + (slot.review?.verdict ?: "verified") + (slot.review?.aiVerdict?.takeIf { it.isNotBlank() }?.let { " · AI: " + it } ?: ""),
-                    ext = if (slot.imagePath.endsWith(".jpg")) "jpg" else "png",
+                    note = slot.role + (if (cut) " · background removed" else "") +
+                        " · " + (slot.review?.verdict ?: "verified") +
+                        (slot.review?.aiVerdict?.takeIf { it.isNotBlank() }?.let { " · AI: " + it } ?: ""),
+                    ext = if (path.endsWith(".jpg", true)) "jpg" else "png",
+                    transparent = cut,
                     placement = placement
                 )
             }

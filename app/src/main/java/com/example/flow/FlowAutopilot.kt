@@ -193,6 +193,24 @@ class FlowAutopilot(
                 delay(2500L)
                 continue
             }
+            // ---- 4b. ROUND 15.2: real background removal for cut-out layers ----
+            // Key visuals / stickers get a transparent PNG made locally. If the picture has no flat
+            // background, FlowCutout refuses and the original is used unchanged (no silent garbage).
+            var cutPath = ""
+            var borderHex = ""
+            val wantsCut = running.role == FlowRoles.KEYFRAME || running.role == FlowRoles.STICKER
+            if (wantsCut) {
+                state(FlowPhase.VERIFYING, done, total, "Background remove ho raha hai (local cut-out)…")
+                val cutResult = runCatching {
+                    val srcFile = File(record.path)
+                    val dstOut = File(srcFile.parentFile ?: context.filesDir, srcFile.nameWithoutExtension + "_cut.png")
+                    FlowCutout.process(srcFile, dstOut)
+                }.getOrNull()
+                if (cutResult != null && cutResult.ok) {
+                    cutPath = cutResult.path
+                    borderHex = cutResult.borderHex
+                }
+            }
             // ---- 5. verify ----
             state(FlowPhase.VERIFYING, done, total, "Verify: crop, glow, background, sharpness…")
             val local = FlowImageProbe.analyse(File(record.path), current.aspect, running.role)
@@ -204,6 +222,7 @@ class FlowAutopilot(
             current = current.withSlot(running.copy(
                 status = status, imagePath = record.path, imageUrl = record.url,
                 imageHash = record.hash, review = review,
+                cutPath = cutPath, borderHex = borderHex,
                 error = when {
                     review == null -> "Picture decode nahi hui"
                     !review.ok -> "Quality gate: " + review.verdict
@@ -213,7 +232,8 @@ class FlowAutopilot(
             FlowLibrary.update(context, record.id) { it.copy(sceneId = running.sceneId, promptIndex = running.index, role = running.role) }
             onPlan(current)
             done++
-            state(FlowPhase.GENERATING, done, total, "Verified: " + (review?.verdict ?: "picture saved"), true, record.path)
+            val cutNote = if (cutPath.isNotBlank()) " · background hataya" else ""
+            state(FlowPhase.GENERATING, done, total, "Verified: " + (review?.verdict ?: "picture saved") + cutNote, true, record.path)
             // ---- 6. the owner's 8 second gap between prompts ----
             if (done < total) delay(delayMs.coerceAtLeast(FlowSettings.MIN_DELAY_MS))
         }
