@@ -840,8 +840,21 @@ class DirectorController(
         }
         val bgs = plan.slots.count { it.layer == com.example.flow.FlowLayerKind.BG || it.layer == com.example.flow.FlowLayerKind.COVER }
         val ovs = plan.slots.size - bgs
+        // One line per scene, so the owner can SEE the plan (background + overlays + motion) before generation.
+        val perScene = plan.slots.groupBy { it.sceneId }.entries.take(10).mapIndexed { i, e ->
+            val bg = e.value.firstOrNull { it.layer == com.example.flow.FlowLayerKind.BG || it.layer == com.example.flow.FlowLayerKind.COVER }
+            val floaters = e.value.filter { it.layer != com.example.flow.FlowLayerKind.BG && it.layer != com.example.flow.FlowLayerKind.COVER }
+            val parts = ArrayList<String>(3)
+            parts.add("BG" + (bg?.motion?.takeIf { it.isNotBlank() }?.let { " (" + it + ")" } ?: ""))
+            floaters.forEach { f ->
+                parts.add((if (f.layer == com.example.flow.FlowLayerKind.ASSET) "ASSET" else "OVERLAY") +
+                    " (" + (f.motion.ifBlank { "float" }) + (if (f.removeBg) ", cut-out" else "") + ")")
+            }
+            "  " + (i + 1) + ". " + parts.joinToString(" + ")
+        }
         say("🖼 Layer plan tayyar: " + bgs + " background + " + ovs + " overlay/cut-out (" + plan.slots.size +
-            " images, aspect " + plan.aspect + ").\n" + plan.notes.joinToString("\n"))
+            " images, aspect " + plan.aspect + ").\n" + perScene.joinToString("\n") +
+            "\n" + plan.notes.joinToString("\n"))
         pendingAutoFinish = autoFinish
         com.example.flow.web.FlowBrowserActivity.start(appContext, projectId, true, _ui.value.brief.prompt, autoFinish)
         return true
