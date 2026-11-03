@@ -145,10 +145,11 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("🌐", fontSize = 16.sp)
                     Column(Modifier.weight(1f)) {
-                        Text(if (total > 0) "Flow: $ready/$total pictures ready" else "Flow browser • login jab chaho",
+                        val layered = plan?.slots?.any { it.layer.isNotBlank() } == true
+                        Text(if (total > 0) (if (layered) "Flow: $ready/$total layers ready (background + overlays)" else "Flow: $ready/$total pictures ready") else "Flow browser • login jab chaho",
                             color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            if (total > 0) "Har picture scene-wise verify hui hai (crop / glow / background / sharpness). 'Flow images lagao' se timeline pe aayengi."
+                            if (total > 0) "Har layer scene-wise verify hui hai. Overlay ka background locally cut hota hai, phir background/overlay/keyframes/motion graphics final QC ke baad timeline pe lagte hain."
                             else "Script approve karo → SAIF har scene ke liye image prompt banayega → browser mein ek-ek karke 8s gap pe generate + download + verify hoga. Login kabhi bhi, kitni bhi baar.",
                             color = Color(0xFF9E95AC), fontSize = 10.sp, lineHeight = 13.sp)
                     }
@@ -206,6 +207,10 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working)
+                Button(onClick = { controller.startFullAuto() }, colors = ButtonDefaults.buttonColors(containerColor = Purple)) {
+                    Text("🚀 Poori video auto", fontSize = 12.sp)
+                }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest != null) OutlinedButton(onClick = { controller.prepareFlowPlan(true) }) { Text("🖼 Flow images (auto)") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = {

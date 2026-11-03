@@ -109,10 +109,11 @@ class FlowBrowserActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val projectId = intent.getStringExtra(EXTRA_PROJECT_ID) ?: ""
         val autostart = intent.getBooleanExtra(EXTRA_AUTOSTART, false)
+        val autofinish = intent.getBooleanExtra(EXTRA_AUTOFINISH, false)
         val topic = intent.getStringExtra(EXTRA_TOPIC) ?: ""
         setContent {
             SaifAiTheme(isLightMode = false) {
-                FlowBrowserScreen(projectId = projectId, autostart = autostart, seedTopic = topic,
+                FlowBrowserScreen(projectId = projectId, autostart = autostart, autofinish = autofinish, seedTopic = topic,
                     onClose = { finish() })
             }
         }
@@ -121,14 +122,18 @@ class FlowBrowserActivity : ComponentActivity() {
     companion object {
         const val EXTRA_PROJECT_ID = "flow_project_id"
         const val EXTRA_AUTOSTART = "flow_autostart"
+        /** Round 16 — hand the finished plan back to the director AND close the browser afterwards. */
+        const val EXTRA_AUTOFINISH = "flow_autofinish"
         const val EXTRA_TOPIC = "flow_topic"
 
         /** Opens the browser full screen. Login is never required up front — it can happen any time. */
-        fun start(context: Context, projectId: String = "", autostart: Boolean = false, topic: String = "") {
+        fun start(context: Context, projectId: String = "", autostart: Boolean = false, topic: String = "",
+                  autofinish: Boolean = false) {
             val i = Intent(context, FlowBrowserActivity::class.java).apply {
                 putExtra(EXTRA_PROJECT_ID, projectId)
                 putExtra(EXTRA_AUTOSTART, autostart)
                 putExtra(EXTRA_TOPIC, topic)
+                putExtra(EXTRA_AUTOFINISH, autofinish)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(i)
@@ -137,7 +142,7 @@ class FlowBrowserActivity : ComponentActivity() {
 }
 
 @Composable
-private fun FlowBrowserScreen(projectId: String, autostart: Boolean, seedTopic: String, onClose: () -> Unit) {
+private fun FlowBrowserScreen(projectId: String, autostart: Boolean, autofinish: Boolean, seedTopic: String, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val session = remember { FlowWebSession(ctx.applicationContext) }
@@ -207,8 +212,14 @@ private fun FlowBrowserScreen(projectId: String, autostart: Boolean, seedTopic: 
         runJob = scope.launch {
             val finished = ap.run()
             persist(finished)
-            FlowBridgeBus.publishPlan(finished, false)
+            // Round 16: when the agent started this run, the director continues by itself (place + QC + timeline).
+            FlowBridgeBus.publishPlan(finished, autofinish)
             FlowBridgeBus.publishLibrary(FlowLibrary.count(ctx))
+            if (autofinish && finished.phase == FlowPhase.DONE) {
+                Toast.makeText(ctx, "Flow done — SAIF layers lagakar timeline bana raha hai", Toast.LENGTH_LONG).show()
+                delay(2600L)
+                onClose()
+            }
         }
     }
 
@@ -228,9 +239,15 @@ private fun FlowBrowserScreen(projectId: String, autostart: Boolean, seedTopic: 
     }
 
     LaunchedEffect(Unit) {
-        if (autostart && plan != null) {
-            delay(1800)
+        if (!autostart) return@LaunchedEffect
+        // The plan is normally already saved, but a slow disk may need a moment — wait instead of doing nothing.
+        var waited = 0
+        while (plan == null && waited < 12) { delay(500); waited++; plan = FlowPlanStore.load(ctx, projectId) ?: FlowPlanStore.latest(ctx) }
+        if (plan != null) {
+            delay(1500)
             startAutopilot()
+        } else {
+            Toast.makeText(ctx, "Flow plan nahi mila — prompts dobara banao (panel neeche)", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -479,7 +496,15 @@ private fun FlowPromptPanel(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(if (slot.status == FlowSlotStatus.VERIFIED) "✓" else "${slot.index + 1}", color = statusColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(6.dp))
-                            Text(slot.role + " · " + slot.sceneId, color = Color(0xFFB9A8E8), fontSize = 9.sp)
+                            val layerTag = when (slot.layer) {
+                                "bg" -> "BG"
+                                "overlay" -> "OVERLAY"
+                                "asset" -> "ASSET"
+                                "cover" -> "COVER"
+                                else -> slot.role
+                            }
+                            val cutTag = if (slot.cutPath.isNotBlank()) " · cut-out ✓" else ""
+                            Text(layerTag + " z" + slot.z + " · " + slot.sceneId + cutTag, color = Color(0xFFB9A8E8), fontSize = 9.sp, maxLines = 1)
                             Spacer(Modifier.weight(1f))
                             if (slot.status == FlowSlotStatus.FAILED) TextButton(onClick = { onRegenerate(slot) }) { Text("retry", fontSize = 9.sp) }
                         }

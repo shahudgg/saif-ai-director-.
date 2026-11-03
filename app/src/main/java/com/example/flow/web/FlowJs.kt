@@ -372,6 +372,128 @@ object FlowJs {
 })(%s);
 """
 
+    /**
+     * Round 16 -- THE ARROW BUTTON, FOR REAL.
+     *
+     * Round 15 typed the prompt but only "asked" for a click: if Flow's send control is an icon-only
+     * button (an SVG arrow with no text) the old scorer found nothing and the page sat there until the
+     * owner tapped the arrow by hand. This version scores every button by label AND by GEOMETRY (a
+     * square-ish control sitting at the bottom-right corner of the composer), then fires a full
+     * pointer/mouse/click sequence on the winner, with Enter and form-submit as the declared fallbacks.
+     */
+    val SUBMIT_V2 = """
+(function(text){
+  var S = window.__saifFlow;
+  if (!S || !S.setPrompt) return 'nosetup';
+  if (!S.composer) return 'nosetup';
+  function label(el){
+    return ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+            (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-testid') || '') + ' ' +
+            (el.getAttribute('aria-description') || '')).toLowerCase();
+  }
+  function nearComposer(el){
+    var c = S.composer();
+    if (!c) return false;
+    var r = el.getBoundingClientRect(), cr = c.getBoundingClientRect();
+    if (!r || !cr) return false;
+    return (r.top < cr.bottom + 170 && r.bottom > cr.top - 170 && r.left > cr.left + cr.width * 0.35);
+  }
+  function candidates(){
+    var nodes = Array.prototype.slice.call(document.querySelectorAll('button,[role="button"],div[role="button"],span[role="button"],a[role="button"]'));
+    var out = [];
+    var c = S.composer();
+    var cr = c ? c.getBoundingClientRect() : null;
+    for (var i = 0; i < nodes.length; i++) {
+      var b = nodes[i];
+      if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
+      var r = b.getBoundingClientRect();
+      if (!r || r.width < 12 || r.height < 12 || r.width > 280 || r.height > 180) continue;
+      var t = label(b);
+      if (t.indexOf('cancel') >= 0 || t.indexOf('close') >= 0 || t.indexOf('delete') >= 0 || t.indexOf('remove') >= 0) continue;
+      if (t.indexOf('upload') >= 0 || t.indexOf('attach') >= 0 || t.indexOf('setting') >= 0) continue;
+      var score = 0;
+      if (t.indexOf('send') >= 0) score += 12;
+      if (t.indexOf('submit') >= 0) score += 11;
+      if (t.indexOf('generate') >= 0) score += 10;
+      if (t.indexOf('create') >= 0) score += 7;
+      if (t.indexOf('arrow') >= 0 || t.indexOf('forward') >= 0) score += 8;
+      if (t.indexOf('start') >= 0 || t.indexOf('run') >= 0) score += 3;
+      if (b.querySelector('svg,img,mat-icon,i')) score += 2;
+      if (nearComposer(b)) score += 7;
+      if (cr) {
+        var dx = Math.abs((r.left + r.width / 2) - (cr.right - 26));
+        var dy = Math.abs((r.top + r.height / 2) - (cr.bottom - 22));
+        if (dx < 100 && dy < 110) score += 10;
+      }
+      if (score <= 2) continue;
+      out.push({ el: b, score: score, name: (t || '').replace(/ +/g, ' ').trim().slice(0, 22) });
+    }
+    out.sort(function(a, b){ return b.score - a.score; });
+    return out;
+  }
+  function fire(el){
+    var r = el.getBoundingClientRect();
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var MP = window.PointerEvent || window.MouseEvent;
+    var kinds = [['pointerover', MP], ['mouseover', MP], ['pointerdown', MP], ['mousedown', MP],
+                 ['pointerup', MP], ['mouseup', MP], ['click', MP]];
+    for (var i = 0; i < kinds.length; i++) {
+      try {
+        var ev = new kinds[i][1](kinds[i][0], { bubbles: true, cancelable: true, clientX: x, clientY: y,
+          view: window, pointerId: 1, isPrimary: true, button: 0, buttons: kinds[i][0].indexOf('down') >= 0 ? 1 : 0 });
+        el.dispatchEvent(ev);
+      } catch(err) {}
+    }
+    try { el.click(); } catch(err) {}
+    return true;
+  }
+  var typed = false;
+  try { typed = !!S.setPrompt(String(text)); } catch(e) { typed = false; }
+  if (!typed) return 'nocomposer';
+  var tries = 0;
+  var hit = null;
+  while (tries < 4 && !hit) {
+    var list = candidates();
+    if (!list.length) break;
+    fire(list[0].el);
+    hit = list[0];
+    tries++;
+    break;
+  }
+  if (hit) return 'ok:click:' + (hit.name || 'button') + ':' + hit.score;
+  if (S.pressEnter && S.pressEnter()) return 'ok:enter';
+  try {
+    var f = document.querySelector('form');
+    if (f) { if (f.requestSubmit) { f.requestSubmit(); return 'ok:form'; } f.submit(); return 'ok:form'; }
+  } catch(e) {}
+  return 'fail:nobutton';
+})(%s);
+"""
+
+    /** What the page looks like right after a submit: was the text taken, is it busy, did an image appear? */
+    val GEN_STATE = """
+(function(){
+  var S = window.__saifFlow || {};
+  function composerValue(){
+    var c = S.composer ? S.composer() : null;
+    if (!c) return '';
+    if (c.tagName === 'TEXTAREA' || c.tagName === 'INPUT') return c.value || '';
+    return c.innerText || '';
+  }
+  var v = composerValue();
+  var body = '';
+  try { body = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : ''; } catch(e) {}
+  var imgs = 0;
+  try { imgs = document.images ? document.images.length : 0; } catch(e) {}
+  return {
+    value: v.slice(0, 160),
+    busy: /(generating|creating|queued|in progress|please wait|rendering|ban raha)/.test(body),
+    images: imgs,
+    hasComposer: !!(S.composer && S.composer())
+  };
+})();
+"""
+
     val ARM = """
 (function(i){
   var S = window.__saifFlow;
@@ -421,6 +543,46 @@ object FlowJs {
   }
   return 'notfound';
 })();
+"""
+
+    /**
+     * Round 16 -- the aspect ratio the OWNER picked.
+     *
+     * Flow remembers the last ratio, and a 16:9 setting under a 9:16 script is wasted generation. Before the
+     * first prompt the autopilot now clicks the matching ratio control (9:16 / 16:9 / 1:1 / 4:5 / 3:4) when the
+     * page exposes one, and reports honestly when it does not.
+     */
+    val SET_ASPECT = """
+(function(aspect){
+  var want = String(aspect || '9:16').replace(/\s/g, '');
+  var map = {
+    '9:16': ['9:16', '9 / 16', 'portrait', 'vertical'],
+    '16:9': ['16:9', '16 / 9', 'landscape', 'widescreen'],
+    '1:1': ['1:1', 'square'],
+    '4:5': ['4:5', '4 / 5'],
+    '3:4': ['3:4', '3 / 4']
+  };
+  var keys = map[want] || [want];
+  function norm(t){ return String(t || '').toLowerCase().replace(/\s/g, '').replace(/\//g, ''); }
+  var els = document.querySelectorAll('button,[role="button"],[role="radio"],[aria-label],[data-value]');
+  for (var k = 0; k < keys.length; k++) {
+    var key = norm(keys[k]);
+    if (!key) continue;
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (!el || el.disabled) continue;
+      var r = el.getBoundingClientRect();
+      if (!r || r.width < 8 || r.height < 8 || r.width > 420) continue;
+      var t = norm((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+                   (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-value') || ''));
+      if (t.indexOf(key) < 0) continue;
+      var pressed = (el.getAttribute('aria-pressed') === 'true') || (el.getAttribute('aria-checked') === 'true');
+      if (pressed) return 'already:' + keys[k];
+      try { el.click(); return 'ok:' + keys[k]; } catch(e) {}
+    }
+  }
+  return 'notfound';
+})(%s);
 """
 
     val CLEAR_STORAGE = """

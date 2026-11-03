@@ -24,7 +24,21 @@ object FlowRoles {
     const val KEYFRAME = "keyframe"
     const val STICKER = "sticker"
     const val COVER = "cover"
-    val ALL = setOf(BACKGROUND, KEYFRAME, STICKER, COVER)
+    /** Round 16 — a second picture for the SAME scene, drawn above the background as a floating layer. */
+    const val OVERLAY = "overlay"
+    val ALL = setOf(BACKGROUND, KEYFRAME, STICKER, COVER, OVERLAY)
+
+    /** Everything that is NOT a full-frame background is treated as a floating layer. */
+    fun isFloating(role: String): Boolean = role == OVERLAY || role == KEYFRAME || role == STICKER
+}
+
+/** Round 16 — which layer of the video a planned picture becomes. */
+object FlowLayerKind {
+    const val BG = "bg"
+    const val OVERLAY = "overlay"
+    const val ASSET = "asset"
+    const val COVER = "cover"
+    val ALL = setOf(BG, OVERLAY, ASSET, COVER)
 }
 
 enum class FlowSlotStatus { PENDING, RUNNING, GENERATED, DOWNLOADED, VERIFIED, FAILED, SKIPPED }
@@ -47,7 +61,25 @@ data class FlowSlot(
     val imageUrl: String = "",
     val imageHash: String = "",
     val review: FlowReview? = null,
-    val error: String = ""
+    val error: String = "",
+    // ---- Round 16: multi-layer planning. A scene now gets a background AND overlays, and the planner
+    // says exactly where each one goes, so the timeline is not guessing any more. ----
+    /** [FlowLayerKind] of this picture (bg / overlay / asset / cover). Blank = old single-layer plan. */
+    val layer: String = "",
+    /** Draw order inside the scene (0 = background, higher = above). */
+    val z: Int = 0,
+    /** Target centre + box, normalized 0..1 of the frame. Used verbatim by the timeline placement. */
+    val targetX: Float = 0.5f,
+    val targetY: Float = 0.5f,
+    val targetW: Float = 1f,
+    val targetH: Float = 1f,
+    /** Named motion the animation planner asked for (pushIn, panLeft, floatUp, orbitSmall, parallaxRight...). */
+    val motion: String = "",
+    /** Transparent PNG produced locally by [FlowCutout] — used instead of [imagePath] when present. */
+    val cutPath: String = "",
+    val removeBg: Boolean = false,
+    /** Dominant border colour measured while cutting out (kept as the chroma fallback). */
+    val borderHex: String = ""
 ) {
     val done: Boolean get() = status == FlowSlotStatus.VERIFIED || status == FlowSlotStatus.DOWNLOADED
 }
@@ -152,6 +184,10 @@ object FlowJson {
         put("status", s.status.name); put("tries", s.tries)
         put("imagePath", s.imagePath); put("imageUrl", s.imageUrl); put("imageHash", s.imageHash)
         put("error", s.error)
+        put("layer", s.layer); put("z", s.z)
+        put("tx", s.targetX.toDouble()); put("ty", s.targetY.toDouble())
+        put("tw", s.targetW.toDouble()); put("th", s.targetH.toDouble())
+        put("motion", s.motion); put("cut", s.cutPath); put("removeBg", s.removeBg); put("border", s.borderHex)
         s.review?.let { put("review", reviewToJson(it)) }
     }
 
@@ -169,7 +205,15 @@ object FlowJson {
         imageUrl = o.optString("imageUrl"),
         imageHash = o.optString("imageHash"),
         review = o.optJSONObject("review")?.let { reviewFromJson(it) },
-        error = o.optString("error")
+        error = o.optString("error"),
+        layer = o.optString("layer", "").let { if (it in FlowLayerKind.ALL) it else "" },
+        z = o.optInt("z"),
+        targetX = o.optDouble("tx", 0.5).toFloat(), targetY = o.optDouble("ty", 0.5).toFloat(),
+        targetW = o.optDouble("tw", 1.0).toFloat(), targetH = o.optDouble("th", 1.0).toFloat(),
+        motion = o.optString("motion"),
+        cutPath = o.optString("cut"),
+        removeBg = o.optBoolean("removeBg"),
+        borderHex = o.optString("border")
     )
 
     fun reviewToJson(r: FlowReview): JSONObject = JSONObject().apply {

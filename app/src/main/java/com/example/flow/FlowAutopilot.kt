@@ -28,6 +28,20 @@ data class FlowCaptured(
     val title: String = ""
 )
 
+/**
+ * Round 16 — the honest result of trying to send a prompt.
+ *
+ * [clicked] = a send/arrow control was really pressed (or Enter / form-submit fired).
+ * [confirmed] = the page then showed it took the prompt (composer cleared, "generating" appeared, or a new
+ * image/POST started). The autopilot retries while [confirmed] is false instead of silently waiting.
+ */
+data class FlowSubmitResult(
+    val clicked: Boolean = false,
+    val confirmed: Boolean = false,
+    val how: String = "",
+    val detail: String = ""
+)
+
 /** Everything the autopilot needs from the WebView. Implemented by [com.example.flow.web.FlowWebSession]. */
 interface FlowDriver {
     suspend fun info(): FlowPageInfo
@@ -39,6 +53,13 @@ interface FlowDriver {
     suspend fun resolveBlob(url: String): String? = null
     /** True when a "new project / start" control was clicked (Flow needs a project before a composer exists). */
     suspend fun openProject(): Boolean = false
+    /** Round 16: click the aspect-ratio control the owner picked (no-op when the page has none). */
+    suspend fun setAspect(aspect: String): Boolean = false
+    /** Round 16: press Flow's own arrow/send button and report whether the prompt was really taken. */
+    suspend fun submitSmart(prompt: String): FlowSubmitResult {
+        val ok = submit(prompt)
+        return FlowSubmitResult(clicked = ok, confirmed = false, how = if (ok) "legacy" else "none")
+    }
 }
 
 /**
@@ -72,6 +93,9 @@ class FlowAutopilot(
         private set
 
     private var current: FlowPlan = plan
+    /** How many times one prompt is re-sent while the page has not confirmed the click. */
+    private val MAX_SUBMIT_TRIES = 3
+    private var aspectApplied = false
 
     fun stop() { stopped = true }
 
@@ -120,14 +144,39 @@ class FlowAutopilot(
                     info = safeInfo()
                 }
             }
+            // ---- 1b. ROUND 16: lock the aspect ratio the owner picked (before any image is generated) ----
+            if (!aspectApplied) {
+                aspectApplied = true
+                val asp = current.aspect.ifBlank { "9:16" }
+                val okAspect = runCatching { driver.setAspect(asp) }.getOrDefault(false)
+                state(FlowPhase.GENERATING, done, total,
+                    if (okAspect) "Aspect " + asp + " set — usi ratio mein images banengi"
+                    else "Aspect " + asp + " control nahi mila — Flow ki apni setting check karo (images phir bhi " + asp + " ke hisaab se plan hain)")
+            }
             // ---- 2. run the prompt ----
             val running = existing.copy(status = FlowSlotStatus.RUNNING, tries = existing.tries + 1, error = "")
             current = current.withSlot(running)
             onPlan(current)
             driver.arm(slot.index)
-            val submitted = driver.submit(running.prompt)
+            // ---- ROUND 16: press the arrow, verify it was taken, retry while it is not ----
+            var send = FlowSubmitResult()
+            for (attempt in 1..MAX_SUBMIT_TRIES) {
+                currentCoroutineContext().ensureActive()
+                if (stopped) { state(FlowPhase.STOPPED, done, total, "Stopped by you."); return current }
+                send = runCatching { driver.submitSmart(running.prompt) }.getOrElse { FlowSubmitResult() }
+                if (send.clicked && send.confirmed) break
+                if (attempt < MAX_SUBMIT_TRIES) {
+                    state(FlowPhase.GENERATING, done, total,
+                        "Arrow confirm nahi hua — dobara bhej raha hoon (" + attempt + "/" + MAX_SUBMIT_TRIES + ")")
+                    // Re-arm so the retry cannot pick up the previous attempt's frame.
+                    runCatching { driver.arm(slot.index) }
+                    delay(1800L)
+                }
+            }
+            val submitted = send.clicked
             state(FlowPhase.GENERATING, done, total,
-                "Prompt ${done + 1}/$total generate ho raha hai" + if (submitted) "" else " (composer nahi mila — aap khud Generate dabao, SAIF picture pakad lega)")
+                "Prompt " + (done + 1) + "/" + total + " generate ho raha hai" +
+                    if (submitted) " (" + send.how.ifBlank { "arrow" } + ")" else " (Flow ka send button nahi mila — Enter/form fallback bhi fail hua)")
             // ---- 3. wait for the picture ----
             var media = awaitCapture(slot.index)
             if (media == null && !submitted) {
@@ -156,6 +205,26 @@ class FlowAutopilot(
                 delay(2500L)
                 continue
             }
+            // ---- 4b. ROUND 16: real background removal for overlay layers ----
+            // The plan asked for a floating layer, so cut the flat background out LOCALLY and keep a
+            // transparent PNG next to the original. If the picture has no flat background the original is
+            // used unchanged and the timeline keeps the normal photo pipeline.
+            var cutPath = ""
+            var borderHex = ""
+            val wantsCut = running.removeBg || FlowRoles.isFloating(running.role)
+            if (wantsCut) {
+                state(FlowPhase.VERIFYING, done, total, "Background remove ho raha hai (local cut-out)…")
+                val cutResult = runCatching {
+                    val srcFile = File(record.path)
+                    val dst = File(srcFile.parentFile ?: context.filesDir,
+                        srcFile.nameWithoutExtension + "_cut.png")
+                    FlowCutout.process(srcFile, dst)
+                }.getOrNull()
+                if (cutResult != null && cutResult.ok) {
+                    cutPath = cutResult.path
+                    borderHex = cutResult.borderHex
+                }
+            }
             // ---- 5. verify ----
             state(FlowPhase.VERIFYING, done, total, "Verify: crop, glow, background, sharpness…")
             val local = FlowImageProbe.analyse(File(record.path), current.aspect, running.role)
@@ -167,6 +236,7 @@ class FlowAutopilot(
             current = current.withSlot(running.copy(
                 status = status, imagePath = record.path, imageUrl = record.url,
                 imageHash = record.hash, review = review,
+                cutPath = cutPath, borderHex = borderHex,
                 error = when {
                     review == null -> "Picture decode nahi hui"
                     !review.ok -> "Quality gate: " + review.verdict
@@ -176,7 +246,8 @@ class FlowAutopilot(
             FlowLibrary.update(context, record.id) { it.copy(sceneId = running.sceneId, promptIndex = running.index, role = running.role) }
             onPlan(current)
             done++
-            state(FlowPhase.GENERATING, done, total, "Verified: " + (review?.verdict ?: "picture saved"), true, record.path)
+            val cutNote = if (cutPath.isNotBlank()) " · background hataya" else ""
+            state(FlowPhase.GENERATING, done, total, "Verified: " + (review?.verdict ?: "picture saved") + cutNote, true, record.path)
             // ---- 6. the owner's 8 second gap between prompts ----
             if (done < total) delay(delayMs.coerceAtLeast(FlowSettings.MIN_DELAY_MS))
         }

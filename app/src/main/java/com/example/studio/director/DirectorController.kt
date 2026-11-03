@@ -431,6 +431,15 @@ class DirectorController(
         } } }
     }
 
+    /**
+     * Round 16 — TRUE ONE-TAP CHAIN.
+     *
+     * When the agent starts the Flow pipeline itself, nobody taps "Add to timeline" afterwards: the browser
+     * hands the finished plan back through the bridge and this flag tells the controller to place the layers,
+     * run the final QC agent and build the timeline automatically.
+     */
+    @Volatile private var pendingAutoFinish = false
+
     private suspend fun guarded(block: suspend () -> Unit) {
         try { block() } catch (e: CancellationException) { throw e }
         catch (e: Exception) { fail(e.message ?: "Unexpected error") }
@@ -529,8 +538,18 @@ class DirectorController(
                 }
                 gate()
             } else if (_ui.value.manifest != null) {
-                say("ℹ️ Flow pictures nahi mili, isliye AI key visuals use hui. Scene-by-scene Flow images chahiye to '🖼 Flow images (auto)' dabao — " +
-                    "prompts script se banenge, browser khulega, aur 8s gap pe images generate + verify hokar lag jayengi.")
+                // ---- ROUND 16: the crew opens Flow AI itself. No tap, no "Flow images (auto)" button. ----
+                say("🌐 SAIF ab khud Flow AI khol raha hai — aapko kuch tap karna nahi hai. Login ek baar karna pade " +
+                    "to kar lena (jab chaho), uske baad ye saare layers khud generate hongi.")
+                val opened = buildFlowPlanAndOpen(autoFinish = true)
+                if (opened) {
+                    update { copy(working = false, status = JobStatus(DirectorStage.FINDING_ASSETS, "Flow khud generate kar raha hai")) }
+                    say("▶️ Flow browser khul gaya: har scene ka BACKGROUND + OVERLAYS ek-ek karke 8s gap pe banenge, " +
+                        "download honge, overlay ka background locally hat jayega, phir layers + keyframes + motion " +
+                        "graphics + final QC ke baad timeline apne aap ban jayega.")
+                    return@guarded
+                }
+                say("ℹ️ Flow plan nahi ban paya, isliye AI key visuals + code animations hi use honge.")
             }
             if (_ui.value.readyToApply) {
                 applyToTimeline()
@@ -794,7 +813,63 @@ class DirectorController(
      * saves the plan, and opens the full-screen Flow browser which generates them one by one with an 8 s gap,
      * downloads + verifies every picture, and hands the plan back to [onFlowPlanReady].
      */
-    fun prepareFlowPlan(autoStart: Boolean = true) {
+    /**
+     * Round 16 — build the layered plan and OPEN FLOW BY ITSELF.
+     *
+     * This is the piece the owner asked for: "agent khud Flow AI open kare, mujhe tap na karna pade". It is a
+     * suspend function, so the agent crew can call it in the middle of its own run, and it launches the
+     * full-screen browser with autostart + autofinish, which means the browser generates every planned
+     * picture, downloads it, cuts the overlays out and hands the plan back — no tap anywhere.
+     */
+    private suspend fun buildFlowPlanAndOpen(autoFinish: Boolean): Boolean {
+        val m = _ui.value.manifest ?: return false
+        status(DirectorStage.FINDING_ASSETS, "Scene-wise background + overlay prompts ban rahe hain",
+            detail = m.scenes.size.toString() + " scenes · background + overlays")
+        val r = AgentOrchestrator(activityBus).supervised(
+            AgentRole.FLOW, "layer plan: har scene ka background + overlays", "",
+            fallbackNote = "local layer planner use hoga (scene ki narration se)"
+        ) { services.buildFlowPlan(projectId, _ui.value.brief, m, _ui.value.script) }
+        val plan = r.getOrElse {
+            say("Flow layer plan nahi bana: " + (it.message ?: "unknown") + " — kuch bhi delete nahi hua.", error = true)
+            return false
+        }
+        com.example.flow.FlowPlanStore.save(appContext, plan)
+        update {
+            copy(flowPlan = plan,
+                status = JobStatus(DirectorStage.FINDING_ASSETS, "" + plan.slots.size + " image prompts ready"))
+        }
+        val bgs = plan.slots.count { it.layer == com.example.flow.FlowLayerKind.BG || it.layer == com.example.flow.FlowLayerKind.COVER }
+        val ovs = plan.slots.size - bgs
+        say("🖼 Layer plan tayyar: " + bgs + " background + " + ovs + " overlay/cut-out (" + plan.slots.size +
+            " images, aspect " + plan.aspect + ").\n" + plan.notes.joinToString("\n"))
+        pendingAutoFinish = autoFinish
+        com.example.flow.web.FlowBrowserActivity.start(appContext, projectId, true, _ui.value.brief.prompt, autoFinish)
+        return true
+    }
+
+    /**
+     * Round 16 — ONE TAP FROM THE TOP OF THE SCREEN.
+     *
+     * The owner types the topic, answers the question card, and presses this. Everything after that is
+     * automatic: research → script → scene plan → narration → layered Flow plan → Flow opens itself →
+     * generate/download/cut-out/verify → layers + keyframes + motion graphics → voice-over → final QC →
+     * timeline. The only thing the owner may still need to do is log in to Flow the first time.
+     */
+    fun startFullAuto() {
+        if (_ui.value.working) return
+        val topic = _ui.value.brief.prompt.trim()
+        if (topic.isBlank()) {
+            say("Pehle topic likho ya question card ke options choose karo — phir ye button dabao. 🚀", error = true)
+            return
+        }
+        if (workflow != DirectorWorkflow.ZERO_TO_VIDEO) {
+            say("Poori auto video sirf Zero-to-video workflow mein chalti hai.", error = true)
+            return
+        }
+        agentRun(topic)
+    }
+
+    fun prepareFlowPlan(autoStart: Boolean = true, autoFinish: Boolean = true) {
         val m = _ui.value.manifest ?: run {
             say("Pehle scene plan banao (🤖 SAIF Agent ya Confirm & start), phir Flow prompts usi script se banenge.", error = true)
             return
@@ -817,7 +892,8 @@ class DirectorController(
             say("🖼 ${plan.slots.size} image prompts tayyar — har scene ke narration se, topic se nahi.\n" +
                 plan.notes.joinToString("\n") + "\n\nFlow browser khul raha hai. Login karo (jab chaho — koi one-time lock nahi), " +
                 "phir Start dabao: SAIF khud ek-ek prompt generate karega (8 s gap), download karega aur verify karega.")
-            com.example.flow.web.FlowBrowserActivity.start(appContext, projectId, autoStart, _ui.value.brief.prompt)
+            pendingAutoFinish = autoFinish
+            com.example.flow.web.FlowBrowserActivity.start(appContext, projectId, autoStart, _ui.value.brief.prompt, autoFinish)
         } }
     }
 
@@ -826,13 +902,15 @@ class DirectorController(
      * resolve karta hai aur (agar bole) seedha timeline pe apply kar deta hai.
      */
     fun onFlowPlanReady(plan: com.example.flow.FlowPlan, applyNow: Boolean = false) {
-        if (_ui.value.working) { say("Abhi ek kaam chal raha hai — Flow plan save ho gaya, thodi der baad lag jayega."); return }
+        val auto = applyNow || pendingAutoFinish
+        pendingAutoFinish = false
+        if (_ui.value.working && !auto) { say("Abhi ek kaam chal raha hai — Flow plan save ho gaya, thodi der baad lag jayega."); return }
         if (_ui.value.manifest == null) {
             update { copy(flowPlan = plan) }
-            say("Flow plan save ho gaya (${plan.slots.size} prompts) — scene plan banne ke baad ye pictures khud lag jayengi.", error = true)
+            say("Flow plan save ho gaya (" + plan.slots.size + " prompts) — scene plan banne ke baad ye pictures khud lag jayengi.", error = true)
             return
         }
-        job = scope.launch { guarded { applyFlowPlanInternal(plan, applyNow) } }
+        job = scope.launch { guarded { applyFlowPlanInternal(plan, applyNow = auto) } }
     }
 
     /** Shared by the browser hand-off and the SAIF Agent crew (so the crew waits for it). */
@@ -841,10 +919,17 @@ class DirectorController(
         run {
             update { copy(working = true, flowPlan = plan) }
             status(DirectorStage.CHECKING_ASSETS, "Flow pictures ko scene-wise lagaya ja raha hai")
-            val usable = plan.slots.filter { it.imagePath.isNotBlank() && File(it.imagePath).exists() }
+            // Round 16: a picture is usable if EITHER the downloaded original or the local transparent
+            // cut-out exists. Overlays prefer the cut-out, backgrounds always use the original.
+            fun layeredPath(slot: com.example.flow.FlowSlot): String {
+                if (slot.cutPath.isNotBlank() && File(slot.cutPath).exists()) return slot.cutPath
+                if (slot.imagePath.isNotBlank() && File(slot.imagePath).exists()) return slot.imagePath
+                return ""
+            }
+            val usable = plan.slots.filter { layeredPath(it).isNotBlank() }
             if (usable.isEmpty()) {
                 update { copy(working = false) }
-                say("Flow plan mein abhi koi downloaded picture nahi hai — browser mein Start dabao. Kuch bhi delete nahi hua.", error = true)
+                say("Flow plan mein abhi koi downloaded picture nahi hai — browser khud generate karega, thoda intezaar karo. Kuch bhi delete nahi hua.", error = true)
                 return@run
             }
             // Transition plan (measured from the real pixels) → manifest scenes.
@@ -860,33 +945,74 @@ class DirectorController(
                 sc.copy(transitionIn = type, transitionMs = t.ms.coerceIn(200L, 900L))
             }
             val newManifest = m.copy(scenes = newScenes)
-            // Resolve every picture with its measured placement.
+            // Resolve every picture with its planned layer, box, motion and (when available) cut-out.
             val add = usable.map { slot ->
                 val transition = transitionsByScene[slot.sceneId]?.type ?: "fade"
                 val placement = com.example.flow.FlowPlacement.forSlot(slot, slot.sceneMs, transition)
+                val path = layeredPath(slot)
+                val cut = path.endsWith("_cut.png", true)
+                val layerName = when {
+                    slot.layer == com.example.flow.FlowLayerKind.OVERLAY -> "overlay"
+                    slot.layer == com.example.flow.FlowLayerKind.ASSET -> "asset"
+                    slot.layer == com.example.flow.FlowLayerKind.COVER -> "cover"
+                    slot.layer == com.example.flow.FlowLayerKind.BG -> "background"
+                    else -> slot.role
+                }
                 ResolvedAsset(
                     sceneId = slot.sceneId, requestId = "flow-" + slot.index, kind = "image",
-                    localPath = slot.imagePath, source = "flow-ai:" + (slot.review?.paletteHex ?: ""),
+                    localPath = path, source = "flow-ai:" + (slot.review?.paletteHex ?: ""),
                     verified = true,
-                    note = slot.role + " · " + (slot.review?.verdict ?: "verified") + (slot.review?.aiVerdict?.takeIf { it.isNotBlank() }?.let { " · AI: " + it } ?: ""),
-                    ext = if (slot.imagePath.endsWith(".jpg")) "jpg" else "png",
+                    note = layerName + " z" + slot.z + " · " + (if (cut) "cut-out" else slot.role) +
+                        (if (slot.motion.isNotBlank()) " · " + slot.motion else "") +
+                        " · " + (slot.review?.verdict ?: "verified") +
+                        (slot.review?.aiVerdict?.takeIf { it.isNotBlank() }?.let { " · AI: " + it } ?: ""),
+                    ext = if (path.endsWith(".jpg", true)) "jpg" else "png",
+                    transparent = cut,
                     placement = placement
                 )
             }
             // KEYFRAME/STICKER slots become floating cut-outs on the same scene; backgrounds replace old Flow assets.
             assets = assets.filterNot { it.requestId.startsWith("flow-") } + add
             store.saveArtifacts(projectId, workflow, narrationClips, assets)
+
+            // ---- ROUND 16 STEP 5: per-scene motion planning that respects the overlay boxes ----
+            status(DirectorStage.GENERATING_ANIMATIONS, "Har scene ki animation + motion graphics plan ho rahi hai")
+            val boxes = HashMap<String, MutableList<AnimBox>>()
+            usable.forEach { slot ->
+                val floating = slot.layer == com.example.flow.FlowLayerKind.OVERLAY ||
+                    slot.layer == com.example.flow.FlowLayerKind.ASSET ||
+                    com.example.flow.FlowRoles.isFloating(slot.role)
+                if (floating) {
+                    boxes.getOrPut(slot.sceneId) { ArrayList() }
+                        .add(AnimBox(slot.targetX, slot.targetY, slot.targetW, slot.targetH))
+                }
+            }
+            val motions = SceneAnimPlanner.plan(newManifest, aspectOf(), boxes)
+            var animated = SceneAnimPlanner.merge(newManifest, motions)
+            gate()
+
+            // ---- ROUND 16 STEP 6: the LAST AGENT checks and fixes layers, keyframes, collisions, continuity ----
+            status(DirectorStage.CHECKING_ASSETS, "Final QC agent: layers, keyframes aur animation check ho rahe hain")
+            val qc = FinalQcAgent.run(animated, assets, plan, aspectOf())
+            animated = qc.manifest
+            assets = qc.assets
+            store.saveArtifacts(projectId, workflow, narrationClips, assets)
+            val qcLine = qc.summary()
+            gate()
+
             val b = _ui.value.brief
-            val (assembled, probs) = TimelineAssembler.assemble(getProject(), newManifest, narrationClips, assets,
+            val (assembled, probs) = TimelineAssembler.assemble(getProject(), animated, narrationClips, assets,
                 captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
                 sfx = SfxFiles.render(appContext, newManifest, library = { kind -> sfxLibrary(kind) }),
                 captionStyle = BrandKit.captionStyle(appContext))
-            val (p, musicNotes) = if (workflow == DirectorWorkflow.ZERO_TO_VIDEO) attachCheckedMusic(assembled, newManifest, b) else assembled to emptyList()
+            val (p, musicNotes) = if (workflow == DirectorWorkflow.ZERO_TO_VIDEO) attachCheckedMusic(assembled, animated, b) else assembled to emptyList()
             gate()
             pendingProject = p
-            update { copy(manifest = newManifest, problems = probs + musicNotes, working = false, readyToApply = true,
-                status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "${usable.size} Flow pictures ready")) }
-            say(flowReport(plan, usable.size, newManifest.scenes.size))
+            update { copy(manifest = animated, problems = probs + musicNotes + qc.fixes.map { "QC: " + it.action } + qc.remaining,
+                working = false, readyToApply = true,
+                status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "" + usable.size + " Flow layers ready")) }
+            say(flowReport(plan, usable.size, animated.scenes.size) + "\n\n" + qcLine +
+                (if (qc.fixes.isNotEmpty()) "\n" + qc.fixes.take(6).joinToString("\n") { "• " + it.check + ": " + it.action } else ""))
             if (applyNow) applyToTimeline()
         }
     }

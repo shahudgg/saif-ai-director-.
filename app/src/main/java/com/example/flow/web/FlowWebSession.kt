@@ -18,6 +18,7 @@ import com.example.flow.FlowDownloader
 import com.example.flow.FlowDriver
 import com.example.flow.FlowMediaRules
 import com.example.flow.FlowPageInfo
+import com.example.flow.FlowSubmitResult
 import com.example.flow.FlowRecord
 import com.example.flow.FlowRoles
 import com.example.flow.FlowSettings
@@ -341,6 +342,43 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         return r != null && r.contains("ok")
     }
 
+    /** Round 16 — press the arrow and WAIT for the page to confirm it took the prompt. */
+    override suspend fun submitSmart(prompt: String): FlowSubmitResult {
+        val before = genState()
+        val js = FlowJs.SUBMIT_V2.replace("%s", JSONObject.quote(prompt))
+        val raw = eval(js)
+        val how = raw?.trim()?.trim('"').orEmpty()
+        if (!how.contains("ok:")) {
+            return FlowSubmitResult(clicked = false, confirmed = false, how = "none",
+                detail = if (raw == null) "page not ready" else how.take(60))
+        }
+        val label = how.substringAfter("ok:", "").take(48)
+        var confirmed = false
+        var i = 0
+        while (i < 9 && !confirmed) {
+            i++
+            delay(1400)
+            val now = genState()
+            if (now == null) continue
+            val wasLen = before?.value?.length ?: 0
+            val cleared = wasLen > 8 && now.value.length < wasLen / 2
+            val grew = now.images > (before?.images ?: 0)
+            if (cleared || grew || now.busy) confirmed = true
+        }
+        _log.value = (_log.value + "\n" + (if (confirmed) "send ok" else "send unconfirmed") + " · " + label.take(40)).trim()
+        return FlowSubmitResult(clicked = true, confirmed = confirmed, how = label, detail = "")
+    }
+
+    private suspend fun genState(): GenState? {
+        val raw = eval(FlowJs.GEN_STATE) ?: return null
+        return runCatching {
+            val o = JSONObject(raw)
+            GenState(o.optString("value"), o.optBoolean("busy"), o.optInt("images"), o.optBoolean("hasComposer"))
+        }.getOrNull()
+    }
+
+    private data class GenState(val value: String, val busy: Boolean, val images: Int, val hasComposer: Boolean)
+
     override suspend fun submit(prompt: String): Boolean {
         val quoted = JSONObject.quote(prompt)
         val js = FlowJs.SUBMIT.replace("%s", quoted)
@@ -352,6 +390,12 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         cookies.getCookie("https://flow.google.com/") ?: ""
 
     override suspend fun cookieFor(url: String): String = runCatching { cookies.getCookie(url) ?: "" }.getOrDefault("")
+
+    override suspend fun setAspect(aspect: String): Boolean {
+        val js = FlowJs.SET_ASPECT.replace("%s", JSONObject.quote(aspect))
+        val r = eval(js) ?: return false
+        return r.contains("ok:") || r.contains("already:")
+    }
 
     override suspend fun openProject(): Boolean {
         val r = eval(FlowJs.NEW_PROJECT)
