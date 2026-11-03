@@ -75,7 +75,7 @@ object FinalQcAgent {
                 val idx = out.indexOfFirst { it.sceneId == scene.id && it.requestId == id }
                 if (idx < 0) continue
                 val a = out[idx]
-                val p = a.placement ?: AssetPlacements.BACKDROP
+                val p = a.placement ?: AssetPlacement()
                 out[idx] = a.copy(placement = p.copy(x = 0.5f, y = 0.42f, width = 0.58f, height = 0.44f,
                     fit = "contain", role = "overlay"))
                 fixes.add(QcFix("double backdrop", scene.id, id + " ko overlay bana diya (plate " + keep + " hi backdrop hai)"))

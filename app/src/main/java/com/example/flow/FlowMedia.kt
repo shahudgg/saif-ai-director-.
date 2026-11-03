@@ -317,10 +317,11 @@ object FlowImageProbe {
         val needsGlow = brightness < 0.24f || contrast < 0.12f
         val glowStrength: Float = if (!needsGlow) 0f else
             (0.30f - brightness).coerceIn(0.06f, 0.30f) + ((0.12 - contrast).coerceAtLeast(0.0) * 0.5).toFloat()
-        val wantsCutout = role == FlowRoles.STICKER || role == FlowRoles.KEYFRAME
+        val wantsCutout = role == FlowRoles.STICKER || role == FlowRoles.KEYFRAME || role == FlowRoles.OVERLAY
         val needsBgRemove = wantsCutout && cornerEqual
         val fit = when {
             role == FlowRoles.BACKGROUND || role == FlowRoles.COVER -> "cover"
+            role == FlowRoles.OVERLAY || role == FlowRoles.STICKER -> "contain"
             cornerEqual || cropLoss > 0.42f -> "contain"
             else -> "cover"
         }

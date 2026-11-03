@@ -215,7 +215,8 @@ private fun FlowBrowserScreen(projectId: String, autostart: Boolean, autofinish:
             // Round 16: when the agent started this run, the director continues by itself (place + QC + timeline).
             FlowBridgeBus.publishPlan(finished, autofinish)
             FlowBridgeBus.publishLibrary(FlowLibrary.count(ctx))
-            if (autofinish && finished.phase == FlowPhase.DONE) {
+            val gotPictures = finished.slots.any { it.imagePath.isNotBlank() || it.cutPath.isNotBlank() }
+            if (autofinish && gotPictures) {
                 Toast.makeText(ctx, "Flow done — SAIF layers lagakar timeline bana raha hai", Toast.LENGTH_LONG).show()
                 delay(2600L)
                 onClose()
