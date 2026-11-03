@@ -372,14 +372,65 @@ object FlowJs {
 })(%s);
 """
 
+    val ARM = """
+(function(i){
+  var S = window.__saifFlow;
+  if (!S || !S.arm) return 'nosetup';
+  return 'ok:' + S.arm(i);
+})(%d);
+"""
+
+    val IMPORT_PAGE = """
+(function(){
+  var S = window.__saifFlow;
+  if (!S || !S.scan) return 0;
+  S.base = {};
+  return S.scan(true);
+})();
+"""
+
+    val SET_ZOOM = """
+(function(z){
+  var S = window.__saifFlow;
+  if (!S || !S.zoom) return z;
+  return S.zoom(z);
+})(%s);
+"""
+
+    val PAGE_INFO = STATE
+
     /**
-     * Round 16 -- THE ARROW BUTTON, FOR REAL.
+     * Round 15 — Flow often lands on the dashboard without a prompt box; a project has to be opened first.
+     * This clicks the most likely "new project / start / create" control when no composer exists, so the
+     * autopilot is not stuck waiting on a page that can never accept a prompt.
+     */
+    val NEW_PROJECT = """
+(function(){
+  var S = window.__saifFlow || {};
+  var c = S.composer ? S.composer() : null;
+  if (c) return 'already';
+  var rx = /(new project|create project|start a project|start creating|create video|new video|generate video|start|create|shuru)/i;
+  var els = document.querySelectorAll('button,a,[role="button"]');
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!el || el.disabled) continue;
+    var t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+    if (!t || t.length > 40) continue;
+    if (!rx.test(t)) continue;
+    try { el.click(); return 'clicked:' + t.slice(0, 24); } catch(e) {}
+  }
+  return 'notfound';
+})();
+"""
+
+    /**
+     * ROUND 15.1 -- THE ARROW BUTTON, FOR REAL.
      *
-     * Round 15 typed the prompt but only "asked" for a click: if Flow's send control is an icon-only
-     * button (an SVG arrow with no text) the old scorer found nothing and the page sat there until the
-     * owner tapped the arrow by hand. This version scores every button by label AND by GEOMETRY (a
-     * square-ish control sitting at the bottom-right corner of the composer), then fires a full
-     * pointer/mouse/click sequence on the winner, with Enter and form-submit as the declared fallbacks.
+     * Round 14/15 typed the prompt but only "asked" for a click: Flow's send control is an icon-only SVG
+     * arrow with no text, so the old scorer found nothing and the page sat there until the owner pressed
+     * the arrow by hand. This version scores every control by label AND by GEOMETRY (a square-ish button
+     * hugging the composer's bottom-right corner), then fires a full pointer/mouse/click sequence on the
+     * winner, with Enter and form-submit as the declared fallbacks.
      */
     val SUBMIT_V2 = """
 (function(text){
@@ -492,97 +543,6 @@ object FlowJs {
     hasComposer: !!(S.composer && S.composer())
   };
 })();
-"""
-
-    val ARM = """
-(function(i){
-  var S = window.__saifFlow;
-  if (!S || !S.arm) return 'nosetup';
-  return 'ok:' + S.arm(i);
-})(%d);
-"""
-
-    val IMPORT_PAGE = """
-(function(){
-  var S = window.__saifFlow;
-  if (!S || !S.scan) return 0;
-  S.base = {};
-  return S.scan(true);
-})();
-"""
-
-    val SET_ZOOM = """
-(function(z){
-  var S = window.__saifFlow;
-  if (!S || !S.zoom) return z;
-  return S.zoom(z);
-})(%s);
-"""
-
-    val PAGE_INFO = STATE
-
-    /**
-     * Round 15 — Flow often lands on the dashboard without a prompt box; a project has to be opened first.
-     * This clicks the most likely "new project / start / create" control when no composer exists, so the
-     * autopilot is not stuck waiting on a page that can never accept a prompt.
-     */
-    val NEW_PROJECT = """
-(function(){
-  var S = window.__saifFlow || {};
-  var c = S.composer ? S.composer() : null;
-  if (c) return 'already';
-  var rx = /(new project|create project|start a project|start creating|create video|new video|generate video|start|create|shuru)/i;
-  var els = document.querySelectorAll('button,a,[role="button"]');
-  for (var i = 0; i < els.length; i++) {
-    var el = els[i];
-    if (!el || el.disabled) continue;
-    var t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
-    if (!t || t.length > 40) continue;
-    if (!rx.test(t)) continue;
-    try { el.click(); return 'clicked:' + t.slice(0, 24); } catch(e) {}
-  }
-  return 'notfound';
-})();
-"""
-
-    /**
-     * Round 16 -- the aspect ratio the OWNER picked.
-     *
-     * Flow remembers the last ratio, and a 16:9 setting under a 9:16 script is wasted generation. Before the
-     * first prompt the autopilot now clicks the matching ratio control (9:16 / 16:9 / 1:1 / 4:5 / 3:4) when the
-     * page exposes one, and reports honestly when it does not.
-     */
-    val SET_ASPECT = """
-(function(aspect){
-  var want = String(aspect || '9:16').replace(/\s/g, '');
-  var map = {
-    '9:16': ['9:16', '9 / 16', 'portrait', 'vertical'],
-    '16:9': ['16:9', '16 / 9', 'landscape', 'widescreen'],
-    '1:1': ['1:1', 'square'],
-    '4:5': ['4:5', '4 / 5'],
-    '3:4': ['3:4', '3 / 4']
-  };
-  var keys = map[want] || [want];
-  function norm(t){ return String(t || '').toLowerCase().replace(/\s/g, '').replace(/\//g, ''); }
-  var els = document.querySelectorAll('button,[role="button"],[role="radio"],[aria-label],[data-value]');
-  for (var k = 0; k < keys.length; k++) {
-    var key = norm(keys[k]);
-    if (!key) continue;
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (!el || el.disabled) continue;
-      var r = el.getBoundingClientRect();
-      if (!r || r.width < 8 || r.height < 8 || r.width > 420) continue;
-      var t = norm((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
-                   (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-value') || ''));
-      if (t.indexOf(key) < 0) continue;
-      var pressed = (el.getAttribute('aria-pressed') === 'true') || (el.getAttribute('aria-checked') === 'true');
-      if (pressed) return 'already:' + keys[k];
-      try { el.click(); return 'ok:' + keys[k]; } catch(e) {}
-    }
-  }
-  return 'notfound';
-})(%s);
 """
 
     val CLEAR_STORAGE = """

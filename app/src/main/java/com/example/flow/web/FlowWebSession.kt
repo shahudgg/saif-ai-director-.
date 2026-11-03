@@ -342,7 +342,7 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         return r != null && r.contains("ok")
     }
 
-    /** Round 16 — press the arrow and WAIT for the page to confirm it took the prompt. */
+    /** ROUND 15.1 — press the arrow and WAIT for the page to confirm it took the prompt. */
     override suspend fun submitSmart(prompt: String): FlowSubmitResult {
         val before = genState()
         val js = FlowJs.SUBMIT_V2.replace("%s", JSONObject.quote(prompt))
@@ -358,8 +358,7 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         while (i < 9 && !confirmed) {
             i++
             delay(1400)
-            val now = genState()
-            if (now == null) continue
+            val now = genState() ?: continue
             val wasLen = before?.value?.length ?: 0
             val cleared = wasLen > 8 && now.value.length < wasLen / 2
             val grew = now.images > (before?.images ?: 0)
@@ -390,12 +389,6 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         cookies.getCookie("https://flow.google.com/") ?: ""
 
     override suspend fun cookieFor(url: String): String = runCatching { cookies.getCookie(url) ?: "" }.getOrDefault("")
-
-    override suspend fun setAspect(aspect: String): Boolean {
-        val js = FlowJs.SET_ASPECT.replace("%s", JSONObject.quote(aspect))
-        val r = eval(js) ?: return false
-        return r.contains("ok:") || r.contains("already:")
-    }
 
     override suspend fun openProject(): Boolean {
         val r = eval(FlowJs.NEW_PROJECT)

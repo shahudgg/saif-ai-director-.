@@ -144,23 +144,16 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
-**Round 16** — the agent now opens Flow ITSELF, presses Flow's real arrow, plans background + overlays per scene,
-cuts overlay backgrounds out locally, plans per-scene motion graphics in the free zones, and a final QC agent
-repairs everything before the timeline. Report: `docs/ROUND_16_REPORT.md`.
-- **Auto Flow:** `DirectorController.buildFlowPlanAndOpen()` runs inside `agentRun()`; browser starts with
-  `autostart + autofinish`, hands the plan back via `FlowBridgeBus`, controller applies + QCs + builds the
-  timeline by itself (`pendingAutoFinish`). New 🚀 "Poori video auto" button = `startFullAuto()`.
-- **Arrow button:** `FlowJs.SUBMIT_V2` (label + geometry scoring, pointer/mouse/click sequence) and `GEN_STATE`
-  confirmation; `FlowDriver.submitSmart()` → `FlowSubmitResult(clicked, confirmed)`, autopilot retries 3×.
-- **Layers:** `flow/LayerPlanner.kt` → per scene background + overlay (+accent), `FlowLayerKind`, slot fields
-  `layer/z/target*/motion/cutPath/removeBg`; aspect ratio is locked on every slot and clicked in Flow (`SET_ASPECT`).
-- **Background removal:** `flow/FlowCutout.kt` flood-fill cut-out → `*_cut.png`; `FlowPlacement` uses the planned
-  box + motion keyframes (`floatUp/orbitSmall/parallaxLeft/Right/popDrift/swaySlow`).
-- **Motion graphics:** `studio/director/SceneAnimPlanner.kt` — camera + accent + information primitive + kicker,
-  placed in the emptiest of five zones measured from the real overlay boxes.
-- **Last agent:** `studio/director/FinalQcAgent.kt` — one backdrop per scene, keyframe clamping, overlay size,
-  graphics-vs-overlay collisions, transition/camera repeats, dead files; every fix shown in the chat.
-- Scene scrim 0.52 → 0.24 so generated plates are visible.
+**Round 15.1** — the Round-16 build was rejected by the owner ("bhot bekaar"); this round RESTORES the Round-15
+build exactly and adds only the two fixes that were actually asked for. Whole Round-16 tree reverted to commit
+`4fbfc1f` (layer planner, cut-out, scene anim planner, final QC and the 🚀 button are gone).
+- **Flow opens by itself:** in `agentRun()`, when no Flow plan with pictures exists, the crew now calls
+  `prepareFlowPlan(autoStart = true, autoFinish = true)` instead of telling the owner to tap "🖼 Flow images (auto)".
+- **Arrow button really pressed:** `FlowJs.SUBMIT_V2` scores send controls by label **and geometry** (square-ish
+  button hugging the composer's bottom-right corner), fires pointer/mouse/click, then `GEN_STATE` confirms the page
+  took the prompt; `FlowDriver.submitSmart` → `FlowSubmitResult(clicked, confirmed)` and the autopilot re-sends up
+  to 3× while unconfirmed. No other behaviour of Round 15 changed.
+- `FlowBrowserActivity` gets an `autofinish` extra so the finished plan is applied and the browser closes itself.
 **Round 15** — live voice actually works now (RECORD_AUDIO was never requested), plus Power Tools (15 tools) and a
 hardened Flow capture/download path. Report: `docs/ROUND_15_REPORT.md`; build: CI run 41487833948, commit `4fbfc1f`.
 - **Live voice root cause:** `MainActivity` only asked for POST_NOTIFICATIONS, so the mic never opened and the session

@@ -221,31 +221,15 @@ class DirectorServices(private val context: Context, private val activity: Agent
      * plus key-visual prompts where a cut-out helps. Saved by the controller and executed in the browser.
      */
     suspend fun buildFlowPlan(projectId: String, b: DirectorBrief, m: SceneManifest, script: String): Result<com.example.flow.FlowPlan> {
-        // Round 16 — layered planning: every scene gets a background plate PLUS overlay cut-outs, each with a
-        // target box, draw order and motion, all locked to the aspect ratio the owner picked.
-        val ask: suspend (String) -> Result<String> = { p ->
-            llm(p, role = LlmRole.PLANNER, system = "You are SAIF, the background artist. Reply with strict JSON only.",
+        val planner = com.example.flow.FlowPromptPlanner(ask = { p ->
+            llm(p, role = LlmRole.PLANNER, system = "You are SAIF, the image director. Reply with strict JSON only.",
                 maxTokens = 6000, traceKind = ActivityKind.SCRIPT, traceTitle = "Scene image prompts")
-        }
-        val topic = b.prompt.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().ifBlank { b.prompt }
-        val aspect = b.aspect ?: "9:16"
-        val style = b.style ?: "cinematic explainer"
-        val layered = com.example.flow.LayerPlanner.build(
+        })
+        return planner.build(
             projectId = projectId,
-            topic = topic,
-            aspect = aspect,
-            style = style,
-            manifest = m,
-            script = script,
-            ask = ask
-        )
-        if (layered.isSuccess) return layered
-        // Declared fallback: the Round-14 single-prompt-per-scene planner, so a plan always exists.
-        return com.example.flow.FlowPromptPlanner(ask = ask).build(
-            projectId = projectId,
-            topic = topic,
-            aspect = aspect,
-            style = style,
+            topic = b.prompt.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().ifBlank { b.prompt },
+            aspect = b.aspect ?: "9:16",
+            style = b.style ?: "cinematic explainer",
             manifest = m,
             script = script
         )

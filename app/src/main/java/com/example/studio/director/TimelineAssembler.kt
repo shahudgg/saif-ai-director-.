@@ -40,10 +40,8 @@ data class FootageRange(val sourceUri: String, val sourceInMs: Long, val sourceO
 object SceneOverlay {
     fun apply(g: SceneGraph): SceneGraph {
         if (g.elements.any { it.id == "asset_scrim" }) return g
-        // Round 16: the plate is a real generated picture now, so the scrim is a light vignette that keeps
-        // captions readable WITHOUT hiding the image (0.52 used to bury it in black).
         val scrim = Element(id = "asset_scrim", type = "rect", x = 0.5f, y = 0.5f, w = 1.3f, h = 1.3f, color = "#000000",
-            anims = listOf(Anim("alpha", 0.24f, 0.24f, 0L, 1L, "linear")))
+            anims = listOf(Anim("alpha", 0.52f, 0.52f, 0L, 1L, "linear")))
         return g.copy(bgTop = "#00000000", bgBottom = "#00000000", elements = listOf(scrim) + g.elements)
     }
 

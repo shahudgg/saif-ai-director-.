@@ -93,3 +93,25 @@ real APIs in this repo — no mock data.
     manual **Project kholo** button.
   - Fixed doubled backslashes inside the injected JS (URL-regex for CSS `background-image`, and the
     `[role="button"]` selector) so the capture script actually matches on the page.
+
+
+---
+
+## 6. Round 15.1 patch (only the two asked-for fixes)
+
+The Round-16 attempt was rejected (too much had changed). The tree is back to exactly this Round-15 build
+(commit `4fbfc1f`) and only these were added:
+
+1. **Flow AI opens by itself.** `agentRun()` no longer prints "🖼 Flow images (auto) dabao"; it calls
+   `prepareFlowPlan(autoStart = true, autoFinish = true)`, which builds the prompts and launches the full-screen
+   browser with autostart. Nothing to tap.
+2. **Flow ka ARROW khud dabta hai.** Old code scored send controls only by text/aria-label, and Flow's arrow is an
+   icon-only SVG → no match, prompt sat in the box. New `FlowJs.SUBMIT_V2`:
+   - scores every control by label **and geometry** (square-ish button at the composer's bottom-right),
+   - fires `pointerover → mouseover → pointerdown → mousedown → pointerup → mouseup → click`,
+   - `GEN_STATE` then confirms the page took it (input cleared / "generating" / new image),
+   - autopilot re-sends up to 3 times while unconfirmed, and says "send unconfirmed" in the log instead of pretending.
+3. `autofinish` makes the browser close itself after the run and the director apply the pictures to the timeline.
+
+Everything else — LayerPlanner, FlowCutout background removal, SceneAnimPlanner, FinalQcAgent, the 🚀 button and the
+0.52→0.24 scrim change — was **removed** because the owner asked for the previous build back.

@@ -122,7 +122,7 @@ class FlowBrowserActivity : ComponentActivity() {
     companion object {
         const val EXTRA_PROJECT_ID = "flow_project_id"
         const val EXTRA_AUTOSTART = "flow_autostart"
-        /** Round 16 — hand the finished plan back to the director AND close the browser afterwards. */
+        /** ROUND 15.1 — hand the finished plan back to the director AND close the browser afterwards. */
         const val EXTRA_AUTOFINISH = "flow_autofinish"
         const val EXTRA_TOPIC = "flow_topic"
 
@@ -212,13 +212,13 @@ private fun FlowBrowserScreen(projectId: String, autostart: Boolean, autofinish:
         runJob = scope.launch {
             val finished = ap.run()
             persist(finished)
-            // Round 16: when the agent started this run, the director continues by itself (place + QC + timeline).
+            // ROUND 15.1: when the agent started this run, the director continues by itself (place + timeline).
             FlowBridgeBus.publishPlan(finished, autofinish)
             FlowBridgeBus.publishLibrary(FlowLibrary.count(ctx))
-            val gotPictures = finished.slots.any { it.imagePath.isNotBlank() || it.cutPath.isNotBlank() }
+            val gotPictures = finished.slots.any { it.imagePath.isNotBlank() }
             if (autofinish && gotPictures) {
-                Toast.makeText(ctx, "Flow done — SAIF layers lagakar timeline bana raha hai", Toast.LENGTH_LONG).show()
-                delay(2600L)
+                Toast.makeText(ctx, "Flow done — SAIF pictures laga raha hai", Toast.LENGTH_LONG).show()
+                delay(2400L)
                 onClose()
             }
         }
@@ -497,15 +497,7 @@ private fun FlowPromptPanel(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(if (slot.status == FlowSlotStatus.VERIFIED) "✓" else "${slot.index + 1}", color = statusColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(6.dp))
-                            val layerTag = when (slot.layer) {
-                                "bg" -> "BG"
-                                "overlay" -> "OVERLAY"
-                                "asset" -> "ASSET"
-                                "cover" -> "COVER"
-                                else -> slot.role
-                            }
-                            val cutTag = if (slot.cutPath.isNotBlank()) " · cut-out ✓" else ""
-                            Text(layerTag + " z" + slot.z + " · " + slot.sceneId + cutTag, color = Color(0xFFB9A8E8), fontSize = 9.sp, maxLines = 1)
+                            Text(slot.role + " · " + slot.sceneId, color = Color(0xFFB9A8E8), fontSize = 9.sp)
                             Spacer(Modifier.weight(1f))
                             if (slot.status == FlowSlotStatus.FAILED) TextButton(onClick = { onRegenerate(slot) }) { Text("retry", fontSize = 9.sp) }
                         }

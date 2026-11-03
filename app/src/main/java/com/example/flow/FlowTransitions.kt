@@ -96,112 +96,39 @@ object FlowTransitions {
  */
 object FlowPlacement {
 
-    /**
-     * Round 16 — the slot's OWN plan decides where it lands.
-     *
-     * A background plate is always full frame. An overlay/asset slot carries the target box, motion name and
-     * (when the local cut-out worked) a transparent PNG, so the floating layer lands exactly where the layer
-     * planner put it instead of in a guessed corner. Old single-layer plans still work: they fall back to the
-     * measured crop/glow/drift logic of Round 14.
-     */
     fun forSlot(slot: FlowSlot, sceneDurationMs: Long, transitionType: String): AssetPlacement {
         val r = slot.review ?: FlowReview()
-        val planned = slot.layer.isNotBlank()
-        val floating = if (planned) {
-            slot.layer == FlowLayerKind.OVERLAY || slot.layer == FlowLayerKind.ASSET
-        } else {
-            slot.role == FlowRoles.STICKER || (slot.role == FlowRoles.KEYFRAME && (r.cornerUniform || slot.removeBg))
-        }
-        val cutout = slot.cutPath.isNotBlank()
-        val base = if (floating) {
+        val sticker = slot.role == FlowRoles.STICKER || (slot.role == FlowRoles.KEYFRAME && r.cornerUniform)
+        val cutout = slot.role == FlowRoles.KEYFRAME && r.needsBgRemove
+        val base = if (sticker) {
             AssetPlacement(
-                x = slot.targetX.coerceIn(0.05f, 0.95f),
-                y = slot.targetY.coerceIn(0.05f, 0.95f),
-                width = slot.targetW.coerceIn(0.2f, 0.9f),
-                height = slot.targetH.coerceIn(0.15f, 0.9f),
-                fit = "contain",
-                role = "overlay",
-                shadow = if (cutout) 0.20f else 0.26f,
-                corner = 0f
+                x = 0.5f + r.cropX, y = 0.42f + r.cropY,
+                width = 0.62f, height = 0.46f, fit = "contain", role = "sticker",
+                shadow = 0.22f, corner = 0f
             )
         } else {
             AssetPlacement(
-                x = 0.5f + r.cropX * 0.5f, y = 0.5f + r.cropY * 0.5f,
+                x = 0.5f + r.cropX, y = 0.5f + r.cropY,
                 width = 1f, height = 1f, fit = r.fit, role = "backdrop"
             )
         }
         val withLook = base.copy(
-            glow = if (r.needsGlow) r.glowStrength else if (floating) 0.22f else 0.05f,
+            glow = if (r.needsGlow) r.glowStrength else 0.05f,
             glowColor = glowColorFor(r.paletteHex),
             brightness = if (r.brightness < 0.3f) 1.12f else 1f,
             contrast = if (r.contrast < 0.18f) 1.10f else 1f,
             saturation = if (r.brightness < 0.3f) 1.06f else 1f,
-            vignette = if (floating) 0.04f else if (r.brightness > 0.72f) 0.20f else 0.08f,
-            // A real transparent PNG never needs a key colour; only fakes do.
-            chromaKey = !cutout && !floating && r.needsBgRemove,
-            drift = if (floating) 0.10f else r.drift,
-            animIn = animForMotion(slot.motion, transitionType, slot.index, floating),
-            animInMs = if (floating) 460L else 420L,
+            vignette = if (r.brightness > 0.72f) 0.20f else 0.08f,
+            chromaKey = cutout,
+            corner = if (sticker) 0.06f else 0f,
+            drift = r.drift,
+            animIn = FlowTransitions.animFor(transitionType, slot.index),
+            animInMs = 420L,
             animOut = "fadeOut",
-            animOutMs = 240L,
-            keyframes = if (floating) overlayKeys(slot, sceneDurationMs) else kenBurns(slot, sceneDurationMs, r, false)
+            animOutMs = 260L,
+            keyframes = kenBurns(slot, sceneDurationMs, r, sticker)
         )
         return AssetPlacements.clamp(withLook)
-    }
-
-    /** Entrance animation: the planned motion name first, then the transition-based fallback. */
-    private fun animForMotion(motion: String, transitionType: String, index: Int, floating: Boolean): String {
-        return when (motion) {
-            "floatUp", "swaySlow" -> "slideUp"
-            "orbitSmall", "popDrift" -> "popIn"
-            "parallaxLeft" -> "slideRight"
-            "parallaxRight" -> "slideLeft"
-            else -> if (floating) "popIn" else FlowTransitions.animFor(transitionType, index)
-        }
-    }
-
-    /**
-     * Keyframe track for a floating layer. Times are LOCAL to the clip (the assembler adds the scene start),
-     * and every value is inside the frame so the layer can never drift off-screen.
-     */
-    private fun overlayKeys(slot: FlowSlot, sceneDurationMs: Long): List<PlacementKey> {
-        if (sceneDurationMs < 900L) return emptyList()
-        val x = slot.targetX.coerceIn(0.08f, 0.92f)
-        val y = slot.targetY.coerceIn(0.08f, 0.92f)
-        val end = (sceneDurationMs - 160L).coerceAtLeast(320L)
-        return when (slot.motion) {
-            "floatUp" -> listOf(
-                PlacementKey(0L, x, (y + 0.06f).coerceAtMost(0.94f), 0.96f, 0f, 0.85f, "easeOut"),
-                PlacementKey(end / 2L, x, y, 1.0f, 0f, 1f, "easeInOut"),
-                PlacementKey(end, x, (y - 0.03f).coerceAtLeast(0.06f), 1.03f, 0f, 1f, "linear")
-            )
-            "orbitSmall" -> listOf(
-                PlacementKey(0L, (x - 0.015f).coerceAtLeast(0.06f), y, 1.0f, -1.5f, 1f, "easeInOut"),
-                PlacementKey(end / 2L, (x + 0.015f).coerceAtMost(0.94f), (y - 0.012f).coerceAtLeast(0.06f), 1.02f, 1.5f, 1f, "easeInOut"),
-                PlacementKey(end, (x - 0.01f).coerceAtLeast(0.06f), y, 1.0f, -1f, 1f, "easeInOut")
-            )
-            "parallaxLeft", "parallaxRight" -> {
-                val dir = if (slot.motion == "parallaxLeft") -1f else 1f
-                listOf(
-                    PlacementKey(0L, (x + 0.03f * dir).coerceIn(0.06f, 0.94f), y, 1.04f, 0f, 1f, "easeOut"),
-                    PlacementKey(end, (x - 0.03f * dir).coerceIn(0.06f, 0.94f), y, 1.0f, 0f, 1f, "linear")
-                )
-            }
-            "popDrift" -> listOf(
-                PlacementKey(0L, x, y, 0.94f, 0f, 0.9f, "backOut"),
-                PlacementKey((end * 22L) / 100L, x, y, 1.05f, 0f, 1f, "easeOut"),
-                PlacementKey(end, x, (y - 0.02f).coerceAtLeast(0.06f), 1.02f, 0f, 1f, "linear")
-            )
-            "swaySlow" -> listOf(
-                PlacementKey(0L, x, y, 1.0f, -2.5f, 1f, "easeInOut"),
-                PlacementKey(end / 2L, x, y, 1.02f, 2.5f, 1f, "easeInOut"),
-                PlacementKey(end, x, y, 1.0f, -1.5f, 1f, "easeInOut")
-            )
-            else -> listOf(
-                PlacementKey(0L, x, y, 0.98f, 0f, 0.9f, "backOut"),
-                PlacementKey(end, x, y, 1.02f, 0f, 1f, "linear")
-            )
-        }
     }
 
     /**
