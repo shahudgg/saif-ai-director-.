@@ -521,12 +521,12 @@ class FlowWebSession(private val context: Context) : FlowDriver {
     override suspend fun setOneImage(): Boolean {
         runCatching { eval(FlowJs.PREPARE_SEND) }
         delay(250L)
-        val opened = runCatching { eval(FlowJs.OPEN_COUNT_MENU) }.getOrNull().let { it != null && it.contains("ok:") }
-        if (!opened) {
+        val menuRaw = runCatching { eval(FlowJs.OPEN_COUNT_MENU) }.getOrNull()
+        if (menuRaw == null || !menuRaw.contains("ok:")) {
             _log.value = (_log.value + "\nFlow output chip nahi mila — 1-image setting manual.").trim()
             return false
         }
-        val parts = unquoteJson(opened).split(":")
+        val parts = unquoteJson(menuRaw).split(":")
         val cx = parts.getOrNull(1)?.toDoubleOrNull() ?: 0.0
         val cy = parts.getOrNull(2)?.toDoubleOrNull() ?: 0.0
         delay(800L)
