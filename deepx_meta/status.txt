@@ -1,0 +1,17 @@
+== runner Wed Nov  4 16:33:49 UTC 2026 ==
+-- pointer file:
+-rwxr-xr-x 1 runner runner 134 Nov  4 16:33 deepx video generator studio.zip
+-- git lfs version:
+git-lfs/3.8.1 (GitHub; linux amd64; go 1.27.3)
+-- git lfs pull:
+lfs_pull_exit=0
+-rwxr-xr-x 1 runner runner 461666809 Nov  4 16:34 deepx video generator studio.zip
+finnally god/UT
+finnally god/xd
+EXTRACTED 530 files 20373048 bytes of 2069 entries
+python_exit=0
+finnally god
+21M	deepx_src
+== done ==
+Switched to a new branch 'deepx-extracted'
+M	TempMailClone.zip

@@ -1,0 +1,61 @@
+================================================================================
+  XDEEP FREE VIDEO GENERATION - UNIFIED VOX, STICKMAN & SUSPENSE ENGINE
+================================================================================
+
+This package unifies the industry's best explainer and animation skills:
+1. VOX DOCUMENTARY ENGINE (from vox-doc):
+   - Code-drawn analog clocks with animated sweeps (6:00>7:00)
+   - Maps with pins dropping on exact (u, v) coordinates with shockwave rings
+   - Red connecting trajectory rules & dotted inset links
+   - Libass complex Devanagari text shaping (LBL, PIN, KEY, TAG, NUM)
+   - Procedural paper backgrounds transitioning to night navy
+2. STICKMAN & CRAYON DOODLE (from kaomei/hand-drawn-video-prompts):
+   - Warm #F8F6EF fine paper canvas
+   - Thick black crayon / ink outlines
+   - Signature 3-color palette (Sunflower Yellow, Cobalt Blue, Tomato Red)
+   - Dual-prompt Google Flow engine (Nano Banana 2 + Veo stop-motion)
+   - Safe lower 15% margins for subtitle clearance
+3. CRAZY SUSPENSE DIRECTOR (from kaomei/stickman-video-director):
+   - 5-Stage High-Completion Heartbeat Engine (Golden Hook -> Elevation)
+   - Sub-bass risers, rapid micro-teaser flashes, anamorphic letterbox snap
+   - Red classified wax stamp impacts and detective evidence-wall outros
+4. HYPERFRAMES ACCELERATED MOTION ARCHITECTURE:
+   - Critically damped spring-pop entrances (power3_out / expo_out deceleration)
+   - Multi-tier parallax with 0.4x background drift & continuous Ken Burns push-in
+   - Noble camera breathing (micro-harmonic sin/cos sway, eliminating nervous jitter)
+   - Dual-tier pre-cached drop shadows (contact + ambient occlusion)
+   - Zero-allocation static background cache with ultrafast x264 animation tuning
+
+GLOBAL INSTALLATION (FOR CLAUDE CODE & ANTIGRAVITY AGENTS):
+--------------------------------------------------------------------------------
+Copy skills to your global agent skills directories:
+  cp -r skills/* ~/.claude/skills/
+  cp -r skills/* ~/.gemini/config/skills/
+
+In any chat:
+- "vox doc start": runs the Vox documentary workflow
+- "stickman start" or "doodle video": runs the crayon doodle / stickman explainer
+- "suspense intro": runs the crazy high-tension intro director
+
+DIRECT CLI WORKFLOW:
+--------------------------------------------------------------------------------
+0. Scan real-time viral trends across YouTube, Twitter/X & Reddit:
+     python core/trends.py --sources youtube,twitter,reddit
+1. Place voiceover audio as VO.wav
+2. Create LINES.tsv
+3. Align voiceover to words:
+     python core/align.py --vo VO.wav --lines LINES.tsv
+4. Generate isolated cutouts on magenta (#FF00FF) via Google Flow:
+     python core/elements.py
+5. Check timing plan & test animation curves:
+     python core/render.py selfcheck
+     python core/render.py plan
+6. Render shots in parallel:
+     python core/render.py shots
+7. Mix broadcast audio with voice ducking (-14 LUFS):
+     python core/mix.py cues.tsv --vo VO.wav --words WORDS.tsv --lines VO.tsv --out mix.wav
+8. Assemble master broadcast video:
+     python core/render.py master
+
+Read ANTIGRAVITY.md for the full 9-step production protocol, real-time trend scanner, Cartesian AI voiceover workflow, and HyperFrames motion standards.
+Read PLAYBOOK.md for the core rules that make documentaries understandable.
