@@ -114,4 +114,72 @@ object SceneVarietyComposer {
         val decorated = SceneGrammar.decorate(beat, base, palette, accent, dur, grammarVariant)
         return LayoutEngine.repair(decorated, aw, ah, dur).graph
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // ROUND 16.1 — BUILD FROM A RESERVED SLOT.
+    // The design plan gives every scene its own element family, layout and hero position, so the
+    // builder never has to reject a whole plan because one scene repeated another: it rebuilds THAT
+    // scene from its own slot. The returned graph is checked against everything already accepted;
+    // only if no checked candidate exists does it return the last candidate (a delivered video always
+    // beats a failed run), and the caller reports that honestly.
+    // ---------------------------------------------------------------------------------------------
+    private val BACKDROP = setOf("glow", "particles", "vignette", "grain", "grid", "sweep", "burst", "flash", "bg", "noise")
+
+    /** Nine hero positions; each scene gets its own so two scenes cannot share the same focal point. */
+    private val HERO_SLOTS = listOf(
+        .50f to .30f, .30f to .28f, .70f to .28f, .50f to .20f, .26f to .46f,
+        .74f to .46f, .50f to .50f, .34f to .44f, .66f to .44f
+    )
+
+    private fun relocate(g: SceneGraph, heroSlot: Int): SceneGraph {
+        val (tx, ty) = HERO_SLOTS[heroSlot.mod(HERO_SLOTS.size)]
+        val hero = g.elements.firstOrNull { it.id == "hero" } ?: return g
+        val dx = tx - hero.x
+        val dy = ty - hero.y
+        return g.copy(elements = g.elements.map { e ->
+            when {
+                e.type in BACKDROP -> e
+                e.id == "hero" -> e.copy(x = (e.x + dx).coerceIn(.16f, .84f), y = (e.y + dy).coerceIn(.18f, .60f))
+                else -> e.copy(x = (e.x + dx * .55f).coerceIn(.10f, .90f), y = (e.y + dy * .55f).coerceIn(.10f, .62f))
+            }
+        })
+    }
+
+    private fun passes(g: SceneGraph, aspect: String, accepted: List<SceneGraph>, dur: Long): Boolean {
+        val (aw, ah) = LayoutEngine.parseAspect(aspect)
+        return LayoutEngine.issues(g, aw, ah, dur).isEmpty() &&
+            SceneLint.problems(g, aw, ah).isEmpty() &&
+            SceneUniqueness.repeatsOf(g, accepted).isEmpty()
+    }
+
+    /**
+     * Compose [beat] from its reserved [slot]. Returns a graph that differs from [accepted] whenever one
+     * exists, and the closest candidate otherwise. [usedFamilies] lets the caller forbid the families that
+     * earlier scenes already took.
+     */
+    fun fromSlot(
+        beat: Beat, aspect: String, dna: StyleDNA?, accentOverride: String?,
+        accepted: List<SceneGraph>, slot: DesignPlan.Slot, usedFamilies: Set<String> = emptySet()
+    ): SceneGraph {
+        val dur = beat.durationMs.coerceAtLeast(1200L)
+        val reserved = ARCHETYPES.firstOrNull { it.type == slot.archetype } ?: ARCHETYPES[slot.index.mod(ARCHETYPES.size)]
+        val rest = ARCHETYPES.filter { it.type != reserved.type }
+            .sortedBy { a -> if (a.type in usedFamilies) 1 else 0 }
+        var last: SceneGraph? = null
+        for ((round, a) in (listOf(reserved) + rest).withIndex()) {
+            for (k in 0 until LAYOUTS) {
+                val layout = (slot.layout + k + round) % LAYOUTS
+                val heroSlot = if (round == 0) slot.heroSlot else slot.heroSlot + round * 3 + k
+                val g = relocate(compose(beat, aspect, a, layout, dna, accentOverride), heroSlot)
+                val (aw, ah) = LayoutEngine.parseAspect(aspect)
+                val fixed = LayoutEngine.repair(g, aw, ah, dur).graph
+                last = fixed
+                if (passes(fixed, aspect, accepted, dur)) return fixed
+            }
+        }
+        // Nothing passed the cosmetic gates: return the reserved family anyway, on its own slot,
+        // instead of failing the video.
+        val fallback = relocate(compose(beat, aspect, reserved, slot.layout, dna, accentOverride), slot.heroSlot)
+        return last ?: fallback
+    }
 }

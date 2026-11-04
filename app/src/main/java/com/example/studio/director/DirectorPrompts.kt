@@ -166,7 +166,11 @@ object DirectorPrompts {
      * Motion-graphics design for a few scenes at a time. Each scene gets its own facts (so the graphics show real numbers and
      * names) and its own suggested layout (shuffled per video), so scenes and videos do not repeat each other.
      */
-    fun sceneBatchV2(b: DirectorBrief, batch: List<Pair<Int, SceneOutline>>, totalScenes: Int, fps: Int, problem: String, factsFor: (SceneOutline) -> List<String>): String = buildString {
+    fun sceneBatchV2(
+        b: DirectorBrief, batch: List<Pair<Int, SceneOutline>>, totalScenes: Int, fps: Int, problem: String,
+        factsFor: (SceneOutline) -> List<String>,
+        slots: Map<Int, com.example.studio.composer.DesignPlan.Slot> = emptyMap()
+    ): String = buildString {
         // ROUND 16.0 — the topic world is stated to the model so its own scenes follow the same art
         // direction the local composer uses (space ≠ business ≠ history).
         runCatching {
@@ -195,8 +199,12 @@ object DirectorPrompts {
             appendLine("Colour mood for this video (unique to it): " + d.palettes.joinToString("; ") { "bg ${it.bgTop}->${it.bgBottom}, accents ${it.accent} and ${it.accent2}" } + ".")
         }
         val seed = StyleDNA.fromBrief(b).seed.toString()
+        if (slots.isNotEmpty()) appendLine("EVERY scene in this video already has a RESERVED design slot (family + layout + hero position + exact time window). Use it: it is how the video stays free of repeated scenes, and a scene that ignores its slot is rebuilt locally.")
         batch.forEach { (idx, o) ->
             appendLine("Scene ${o.id} (duration ${o.endMs - o.startMs} ms) narration: ${o.narration}")
+            slots[idx]?.let { slot ->
+                appendLine("  " + com.example.studio.composer.DesignPlan.hint(slot, totalScenes))
+            }
             appendLine("  suggested layout: ${SceneArchetypes.forScene(seed, idx)}")
             factsFor(o).takeIf { it.isNotEmpty() }?.let { f -> appendLine("  facts you may show: " + f.joinToString(" | ")) }
         }

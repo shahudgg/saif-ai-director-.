@@ -8,6 +8,7 @@ import com.example.studio.composer.LayoutEngine
 import com.example.studio.composer.LocalBeatAnalyzer
 import com.example.studio.composer.Strategy
 import com.example.studio.composer.SceneLint
+import com.example.studio.composer.DesignPlan
 import com.example.studio.composer.SceneUniqueness
 import com.example.studio.composer.SceneVarietyComposer
 import com.example.studio.composer.StyleDNA
@@ -349,12 +350,18 @@ class DirectorServices(private val context: Context, private val activity: Agent
             if (bad != null) return Result.failure(IllegalStateException("The script $bad. Please regenerate or edit it."))
         }
         // Round 10: ~15 scenes for a 1-minute video — beat count scales with the target length, each beat 2.2–9 s.
-        val targetBeats = (estMs / 4000L).toInt().coerceIn(6, 24)
-        val targetBeatMs = (estMs / targetBeats).coerceIn(2200L, 9000L)
-        val outlines = BeatPlanner.outline(script, estMs, b.narrationLanguage, b.pace, targetBeatMs = targetBeatMs, maxBeats = 30)
+        // ROUND 16.1 — second-level planning: one scene per ~4 s of speech (2.2–7 s each), up to 40 scenes,
+        // so a long video is planned minute by minute and every scene owns a different slice of the narration.
+        val targetBeats = (estMs / 4000L).toInt().coerceIn(6, 40)
+        val targetBeatMs = (estMs / targetBeats).coerceIn(2200L, 7000L)
+        val outlines = BeatPlanner.outline(script, estMs, b.narrationLanguage, b.pace, targetBeatMs = targetBeatMs, maxBeats = 40)
         if (outlines.isEmpty()) return Result.failure(IllegalStateException("The script is empty, so no scenes can be planned."))
         val total = outlines.size
         val (aw, ah) = LayoutEngine.parseAspect(b.aspect ?: "9:16")
+        // ROUND 16.1 — every scene is given its own reserved design slot AND its own narration window
+        // BEFORE anything is designed, so two scenes cannot be handed the same design by accident.
+        val dna = StyleDNA.fromBrief(b)
+        val designPlan = DesignPlan.plan(total, dna, outlines.map { it.startMs to it.endMs })
         val guard: (String) -> String? = { ModelOutputGuard.reason(it, b.narrationLanguage) }
 
         // How much to trust the configured model is measured once per provider+model (see CapabilityProbe).
@@ -409,13 +416,14 @@ class DirectorServices(private val context: Context, private val activity: Agent
                         continue
                     }
                     var accepted: List<Scene>? = null
+                    var acceptedDrop: Set<Int> = emptySet()
                     var problem = ""
                     fun reject(reason: String): String {
                         activity?.instant(ActivityKind.SCENE_JSON, "Scene batch rejected", reason)
                         return reason
                     }
                     for (attempt in 1..attemptsPerBatch) {
-                        val call = llm(DirectorPrompts.sceneBatchV2(b, batch.map { it.index to it.value }, total, fps, problem) { o -> SceneFacts.forScene(digestFacts, o.narration) }, maxTokens = 6000, traceKind = ActivityKind.SCENE_JSON, traceTitle = "Scene definitions · declarative JSON")
+                        val call = llm(DirectorPrompts.sceneBatchV2(b, batch.map { it.index to it.value }, total, fps, problem, { o -> SceneFacts.forScene(digestFacts, o.narration) }, designPlan.associateBy { it.index }), maxTokens = 6000, traceKind = ActivityKind.SCENE_JSON, traceTitle = "Scene definitions · declarative JSON")
                         if (call.isFailure) { modelDown = call.exceptionOrNull(); break }
                         val raw = call.getOrThrow()
                         val rawBad = ModelOutputGuard.reason(raw, b.narrationLanguage)
@@ -437,18 +445,22 @@ class DirectorServices(private val context: Context, private val activity: Agent
                             LayoutEngine.issues(fx, aw, ah, sc.durationMs).firstOrNull()?.toString()
                         } }
                         if (layoutBad != null) { problem = reject("Layout problem: $layoutBad. Keep every element fully inside the frame, text inside its shape, and elements apart from each other."); continue }
-                        // ANTI-TEMPLATE GATE: no scene may repeat one already accepted, in this batch or earlier.
-                        var uniqBad: String? = null
+                        // ANTI-TEMPLATE GATE — ROUND 16.1: only the scene that repeats is dropped and rebuilt
+                        // locally from its own reserved slot. The rest of the batch is kept, so one repeated
+                        // scene can never throw away the whole plan (or force the owner to retry by hand).
                         val running = ArrayList<SceneGraph>(acceptedGraphs)
+                        val drop = HashSet<Int>()
                         for (mi in merged.indices) {
                             val gr = merged[mi].graph ?: continue
                             val fixed = LayoutEngine.repair(SceneLint.adoptCards(gr, aw, ah), aw, ah, merged[mi].durationMs).graph
                             val why = SceneUniqueness.reason(fixed, running, batch[mi].index)
-                            if (why != null) { uniqBad = why; break }
-                            running.add(fixed)
+                            if (why != null) {
+                                drop += mi
+                                activity?.instant(ActivityKind.SCENE_JSON, "Repeated scene replaced", why.take(160))
+                            } else running.add(fixed)
                         }
-                        if (uniqBad != null) { problem = reject("Originality problem: $uniqBad"); continue }
                         accepted = merged
+                        acceptedDrop = drop
                         activity?.instant(ActivityKind.SCENE_JSON, "Scene batch accepted", "${merged.size} scenes passed validation and uniqueness checks.")
                         break
                     }
@@ -456,12 +468,13 @@ class DirectorServices(private val context: Context, private val activity: Agent
                     accepted?.let { ok ->
                         batch.forEachIndexed { k, iv ->
                             val scene = ok[k]
+                            val graph = scene.graph?.let { LayoutEngine.repair(SceneLint.adoptCards(it, aw, ah), aw, ah, scene.durationMs).graph }
+                            if (k in acceptedDrop) return@forEachIndexed      // rebuilt locally, never thrown away the batch
                             modelScenes[iv.index] = scene
                             sceneCache[cacheKey(b, outs[k])] = scene
-                            val graph = scene.graph?.let { LayoutEngine.repair(SceneLint.adoptCards(it, aw, ah), aw, ah, scene.durationMs).graph }
                             onSceneAccepted(iv.index, scene.copy(graph = graph))
                         }
-                        ok.forEach { sc -> sc.graph?.let { gr ->
+                        ok.forEachIndexed { k, sc -> if (k !in acceptedDrop) sc.graph?.let { gr ->
                             acceptedGraphs.add(LayoutEngine.repair(SceneLint.adoptCards(gr, aw, ah), aw, ah, sc.durationMs).graph)
                         } }
                     }
@@ -482,7 +495,6 @@ class DirectorServices(private val context: Context, private val activity: Agent
         // Start empty: acceptedGraphs includes the current model scene, so seeding this list with it
         // makes every model candidate collide with itself. Only actually built earlier scenes belong here.
         val builtGraphs = ArrayList<SceneGraph>()
-        val dna = StyleDNA.fromBrief(b)
         val scenes = ArrayList<Scene>()
         outlines.forEachIndexed { i, o ->
             currentCoroutineContext().ensureActive()
@@ -498,8 +510,14 @@ class DirectorServices(private val context: Context, private val activity: Agent
             }
             if (graph == null) {
                 // Deterministic exhaustive replan; never accept the last candidate merely because retries ran out.
+                val used = builtGraphs.flatMap { g -> g.elements.map { it.type } }.toSet()
                 graph = SceneVarietyComposer.unique(beat, b.aspect ?: "9:16", dna, BrandKit.accent(context), builtGraphs)
-                    ?: return Result.failure(IllegalStateException("Could not find a unique valid design for scene ${i + 1}; no repeated scene was accepted."))
+                    // ROUND 16.1 — never fail the whole video for one scene: build it from its reserved slot.
+                    ?: SceneVarietyComposer.fromSlot(beat, b.aspect ?: "9:16", dna, BrandKit.accent(context), builtGraphs, designPlan[i], used)
+                        .also {
+                            activity?.instant(ActivityKind.SCENE_JSON, "Scene ${i + 1} rebuilt from its reserved slot",
+                                "${designPlan[i].archetype} · ${designPlan[i].clock()}")
+                        }
                 localCount++
             }
             val scene = Scene(
@@ -519,10 +537,30 @@ class DirectorServices(private val context: Context, private val activity: Agent
         note.append(when (strategy) { null -> " — no AI model configured, so visuals were designed locally from your script."; else -> " — model strategy: ${strategy.name}." })
         if (modelDown != null) note.append(" The model became unavailable, so the remaining beats were designed locally.")
         else if (strategy != null && localCount > 0 && designByModel) note.append(" $localCount beat(s) were redesigned by the local composer because the model's design repeated an earlier scene or failed validation.")
+        // ROUND 16.1 — if two finished scenes still look alike, only the LATER one is rebuilt (from a family
+        // nobody has used yet) and everything else stays exactly as it was. No manual retry, no lost plan.
+        var repairedRepeats = 0
+        var repairPass = 0
+        while (repairPass < 3) {
+            val collisions = SceneUniqueness.collisions(scenes.map { it.graph })
+            if (collisions.isEmpty()) break
+            for ((_, later) in collisions) {
+                val sc = scenes[later]
+                val others = scenes.filterIndexed { i, _ -> i != later }.mapNotNull { it.graph }
+                val used = others.flatMap { g -> g.elements.map { it.type } }.toSet()
+                val g = SceneVarietyComposer.fromSlot(beats[later].copy(durationMs = sc.durationMs),
+                    b.aspect ?: "9:16", dna, BrandKit.accent(context), others, designPlan[later], used)
+                scenes[later] = sc.copy(graph = g)
+                repairedRepeats++
+            }
+            repairPass++
+        }
         val collisions = SceneUniqueness.collisions(scenes.map { it.graph })
-        if (collisions.isNotEmpty()) return Result.failure(IllegalStateException("Scene uniqueness gate failed: " +
-            collisions.take(3).joinToString(", ") { "scene ${it.first + 1} and ${it.second + 1}" }))
-        note.append(" Every scene passed the uniqueness and layout gates.")
+        note.append(" Every scene passed the layout gates.")
+        if (repairedRepeats > 0) note.append(" $repairedRepeats repeated scene(s) were rebuilt automatically from their own design slot.")
+        note.append(" Time plan: " + designPlan.take(3).joinToString(" · ") { it.clock() } +
+            (if (designPlan.size > 3) " … " + designPlan.last().clock() else "") + " (${designPlan.size} scenes, har scene ka apna window).")
+        if (collisions.isNotEmpty()) note.append(" Note: ${collisions.size} pair(s) still share a family — everything else was kept.")
         lastPlanNote = note.toString()
 
         var m = SceneManifest(fps = fps, title = b.prompt.lineSequence().firstOrNull().orEmpty().take(60), scenes = scenes)

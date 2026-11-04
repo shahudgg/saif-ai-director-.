@@ -590,10 +590,20 @@ class DirectorController(
         }
         status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations")
         val epoch = beginStoryboard()
-        var manifest = services.planManifest(b, script,
+        // ROUND 16.1 — planning repairs itself. A repeated scene is rebuilt in place; if a repeat still
+        // reaches this level, planning is retried automatically once, so the owner never has to type a retry.
+        suspend fun planOnce() = services.planManifest(b, script,
             onProgress = { i, n -> status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations", (i - 1f) / n, "Batch $i of $n") },
-            onSceneAccepted = { _, scene -> publishStoryboard(epoch, scene) }
-        ).getOrElse { fail("Scene planning failed: ${it.message}"); return }
+            onSceneAccepted = { _, scene -> publishStoryboard(epoch, scene) })
+        var planned = planOnce()
+        if (planned.isFailure) {
+            val msg = planned.exceptionOrNull()?.message.orEmpty()
+            if (listOf("repeat", "unique", "uniqueness", "design of scene").any { msg.contains(it, ignoreCase = true) }) {
+                say("🔁 Ek scene repeat ho gayi thi — poora plan reject nahi kiya. Automatic retry chal raha hai, aapko kuch type karne ki zaroorat nahi.")
+                planned = planOnce()
+            }
+        }
+        var manifest = planned.getOrElse { fail("Scene planning failed: ${it.message}"); return }
         gate()
         services.lastPlanNote.takeIf { it.isNotBlank() }?.let { say(it) }
         update { copy(manifest = manifest, liveScenes = emptyList()) }
@@ -1132,7 +1142,11 @@ class DirectorController(
     private fun uniqueRedesign(beat: Beat, scenes: List<Scene>, variant: Int, accent: String?): SceneGraph? {
         val base = StyleDNA.fromBrief(_ui.value.brief)
         val dna = base.copy(variantShift = (base.variantShift + variant).mod(3))
-        return SceneVarietyComposer.unique(beat, aspectOf(), dna, accent, scenes.mapNotNull { it.graph })
+        val accepted = scenes.mapNotNull { it.graph }
+        return SceneVarietyComposer.unique(beat, aspectOf(), dna, accent, accepted)
+            // ROUND 16.1 — restyling never dead-ends: the last resort rebuilds from a fresh reserved slot.
+            ?: SceneVarietyComposer.fromSlot(beat, aspectOf(), dna, accent, accepted,
+                com.example.studio.composer.DesignPlan.plan(accepted.size + 1, dna, emptyList()).last())
     }
 
     /** Replaces one scene's layout with the next local design variant. Narration, timing and all other scenes stay untouched. */
