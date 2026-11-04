@@ -19,10 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout
+      - name: Checkout main (the zip lives there)
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 1
+          lfs: false
 
       - name: Extract (never aborts; everything is logged)
         run: |
