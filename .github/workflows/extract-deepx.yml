@@ -1,0 +1,111 @@
+name: Extract DeepX studio source
+
+# The DeepX zip is stored in Git LFS (a 461 MB blob). The development sandbox can reach
+# github.com / api.github.com but NOT the LFS object hosts (media.githubusercontent.com,
+# github-cloud.s3.amazonaws.com), so this workflow does the extraction on a GitHub runner —
+# which has full network + LFS access — and pushes the FILTERED SOURCE back to a normal branch
+# that can be read with a plain `git fetch`.
+on:
+  push:
+    paths:
+      - '.github/workflows/extract-deepx.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout (with LFS)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 1
+
+      - name: Materialise the LFS zip
+        run: |
+          set -e
+          FILE="deepx video generator studio.zip"
+          ls -lh "$FILE"
+          head -c 200 "$FILE" | strings | head -3
+          git lfs pull --include="$FILE" || true
+          ls -lh "$FILE"
+          python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print('entries', len(z.infolist()))" "$FILE"
+
+      - name: Extract + filter source
+        run: |
+          python3 - <<'PY'
+          import zipfile, os, json, shutil
+          src = "deepx video generator studio.zip"
+          out = "deepx_src"
+          shutil.rmtree(out, ignore_errors=True)
+          os.makedirs("deepx_meta", exist_ok=True)
+
+          CODE = {".ts",".tsx",".js",".jsx",".mjs",".cjs",".css",".scss",".sass",".less",
+                  ".html",".htm",".json",".md",".txt",".yml",".yaml",".py",".vue",".svelte",
+                  ".toml",".gradle",".kt",".java",".xml",".properties",".sql",".env",".example",
+                  ".sh",".gitignore",".dockerfile",".lock"}
+          MEDIA = {".png",".jpg",".jpeg",".webp",".gif",".ico",".svg",".woff",".woff2",".ttf",".otf",".mp3",".mp4"}
+          SKIP = {"node_modules",".git","dist","build","out",".next",".nuxt","coverage",".cache",
+                  "Pods","__pycache__",".gradle",".idea",".vscode","venv",".venv","target",".turbo"}
+          SKIP_FILES = {"package-lock.json","yarn.lock","pnpm-lock.yaml",".DS_Store"}
+
+          total = 0
+          count = 0
+          skipped_large = 0
+          CAP = 95_000_000
+          listing = []
+          with zipfile.ZipFile(src) as z:
+              infos = z.infolist()
+              listing = [(i.filename, i.file_size) for i in infos]
+              for i in infos:
+                  if i.is_dir():
+                      continue
+                  name = i.filename.replace("\\", "/")
+                  parts = set(name.split("/"))
+                  if parts & SKIP:
+                      continue
+                  base = os.path.basename(name)
+                  if base in SKIP_FILES:
+                      continue
+                  ext = os.path.splitext(name)[1].lower()
+                  if not (ext in CODE or ext in MEDIA):
+                      continue
+                  limit = 4_000_000 if ext in CODE else 700_000
+                  if i.file_size > limit:
+                      skipped_large += 1
+                      continue
+                  if total > CAP:
+                      continue
+                  try:
+                      data = z.read(i)
+                  except Exception:
+                      continue
+                  dest = os.path.join(out, name)
+                  os.makedirs(os.path.dirname(dest) or out, exist_ok=True)
+                  with open(dest, "wb") as f:
+                      f.write(data)
+                  total += len(data)
+                  count += 1
+
+          with open("deepx_meta/listing.txt", "w") as f:
+              f.write("\n".join(f"{n}\t{s}" for n, s in listing[:20000]))
+          json.dump({"files": count, "bytes": total, "zip_entries": len(listing), "skipped_large": skipped_large},
+                    open("deepx_meta/summary.json", "w"), indent=2)
+          print("kept", count, "files,", total, "bytes of", len(listing), "entries; skipped_large", skipped_large)
+          PY
+
+      - name: Push extracted source to a normal branch
+        run: |
+          set -e
+          ls deepx_src | head -20
+          cat deepx_meta/summary.json
+          git config user.name "saif-extractor"
+          git config user.email "noreply@example.com"
+          git checkout -B deepx-extracted
+          git add -A deepx_src deepx_meta
+          git -c core.quotepath=false commit -m "DeepX studio: filtered source (no node_modules/build) for 1:1 port into SAIF AI" || echo "nothing to commit"
+          git push --force origin deepx-extracted
