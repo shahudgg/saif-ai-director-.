@@ -89,6 +89,8 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
     var showAgent by remember { mutableStateOf(false) }
     var showFlowSetup by remember { mutableStateOf(false) }
     var showBatch by remember { mutableStateOf(false) }
+    /** ROUND 15.8 — secondary tools are collapsed by default so the screen has ONE clear action. */
+    var showMore by remember { mutableStateOf(false) }
     var checkingMusic by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scrollScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -135,16 +137,39 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
             }
         }
 
-        // Round 12 — one-time Flow setup banner (the video's "browser button" at the top of zero-to-video)
-        if (wf == DirectorWorkflow.ZERO_TO_VIDEO && com.example.ui.components.FlowAssetStore.count(ctx) == 0) {
+        // ROUND 15.8 — one glance tells the owner where the video actually is. Every dot is real state,
+        // never an optimistic guess: prompt → script → scenes → images → timeline.
+        StageStrip(
+            hasTopic = ui.brief.prompt.isNotBlank(),
+            hasScript = ui.script.isNotBlank(),
+            scenes = ui.manifest?.scenes?.size ?: 0,
+            imagesDone = ui.flowPlan?.finishedCount ?: 0,
+            imagesTotal = ui.flowPlan?.slots?.size ?: 0,
+            timelineReady = ui.readyToApply || ui.applied,
+            working = ui.working
+        )
+
+        // Round 14 — Flow status card. Login is NEVER a one-time lock: the browser opens any time and the
+        // session stays signed in until the owner logs out.
+        if (wf == DirectorWorkflow.ZERO_TO_VIDEO) {
+            val plan = ui.flowPlan ?: remember(ui.manifest?.scenes?.size) { com.example.flow.FlowPlanStore.load(ctx, controller.projectId) }
+            val ready = plan?.finishedCount ?: 0
+            val total = plan?.slots?.size ?: 0
             Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp), shape = RoundedCornerShape(12.dp), color = Color(0xFF1D1430), border = BorderStroke(1.dp, Color(0x557B2BFF))) {
                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("1️⃣", fontSize = 16.sp)
+                    Text("🌐", fontSize = 16.sp)
                     Column(Modifier.weight(1f)) {
-                        Text("One-time setup: Google Flow mein login karo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Browser kholo, flow.google.com pe Gmail se login karo — baad mein SAIF Agent wahin se topic ke liye saari images 8-8 second ke gap mein bana lega aur yahin download karega.", color = Color(0xFF9E95AC), fontSize = 10.sp, lineHeight = 13.sp)
+                        Text(if (total > 0) "Flow: $ready/$total pictures ready" else "Flow browser • login jab chaho",
+                            color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (total > 0) "Har picture scene-wise verify hui hai (crop / glow / background / sharpness). 'Flow images lagao' se timeline pe aayengi."
+                            else "Script approve karo → SAIF har scene ke liye image prompt banayega → browser mein ek-ek karke 8s gap pe generate + download + verify hoga. Login kabhi bhi, kitni bhi baar.",
+                            color = Color(0xFF9E95AC), fontSize = 10.sp, lineHeight = 13.sp)
                     }
-                    OutlinedButton(onClick = { showFlowSetup = true }) { Text("Open browser", fontSize = 10.sp) }
+                    OutlinedButton(onClick = {
+                        if (ui.manifest != null && (plan == null || plan.slots.isEmpty())) controller.prepareFlowPlan(true)
+                        else com.example.flow.web.FlowBrowserActivity.start(ctx, controller.projectId, false, ui.brief.prompt)
+                    }) { Text(if (ui.manifest != null && (plan == null || plan.slots.isEmpty())) "Prompts banao" else "Browser", fontSize = 10.sp) }
                 }
             }
         }
@@ -191,13 +216,39 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
             }
         }
 
-        // Action bar — only real, state-driven actions
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ROUND 15.8 — CLEAN ACTION AREA: exactly one primary step is on screen; the rest live behind
+        // "More tools", so the owner never has to hunt through twelve equal-looking buttons.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val primaryMod = Modifier.weight(1f)
+            val purple = ButtonDefaults.buttonColors(containerColor = Purple)
+            // Exactly one primary step at a time — driven purely by the controller's real state.
+            when {
+                ui.working -> Spacer(Modifier.weight(1f))
+                ui.awaitingBriefConfirm -> Button(enabled = !checkingMusic, onClick = controller::confirmAndStart,
+                    modifier = primaryMod, colors = purple) { Text("Brief confirm karo → video banao", fontWeight = FontWeight.Bold) }
+                ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null -> Button(enabled = !checkingMusic,
+                    onClick = controller::approveScript, modifier = primaryMod, colors = purple) { Text("Script approve karo", fontWeight = FontWeight.Bold) }
+                ui.readyToApply || ui.applied -> Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() },
+                    modifier = primaryMod, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Timeline pe lagao", fontWeight = FontWeight.Bold) }
+                ui.status?.failed == true -> Button(enabled = !checkingMusic, onClick = controller::retry,
+                    modifier = primaryMod, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B))) { Text("Retry", fontWeight = FontWeight.Bold) }
+                ui.manifest != null -> Button(enabled = !checkingMusic, onClick = { controller.prepareFlowPlan(true) },
+                    modifier = primaryMod, colors = purple) { Text("Images banao (scene-wise)", fontWeight = FontWeight.Bold) }
+                wf == DirectorWorkflow.ZERO_TO_VIDEO -> Button(enabled = !checkingMusic, onClick = { showAgent = true },
+                    modifier = primaryMod, colors = purple) { Text("🤖 SAIF Agent chalao", fontWeight = FontWeight.Bold) }
+                else -> Spacer(Modifier.weight(1f))
+            }
+            OutlinedButton(onClick = { showMore = !showMore }) { Text(if (showMore) "Band karo" else "Tools", fontSize = 12.sp) }
+        }
+        if (showMore) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
-            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showBatch = true }) { Text("🖼 Flow images") }
-            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = { showFlowSetup = true }) { Text("🌐 Flow browser") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest != null) OutlinedButton(onClick = { controller.prepareFlowPlan(true) }) { Text("🖼 Flow images (auto)") }
+            if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working) OutlinedButton(onClick = {
+                com.example.flow.web.FlowBrowserActivity.start(ctx, controller.projectId, false, ui.brief.prompt)
+            }) { Text("🌐 Flow browser") }
             if (ui.awaitingBriefConfirm && !ui.working) Button(enabled = !checkingMusic, onClick = controller::confirmAndStart, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Confirm & start") }
             if (ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null && !ui.working) Button(enabled = !checkingMusic, onClick = controller::approveScript, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Approve script") }
             if (ui.readyToApply && !ui.working) Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Add to timeline") }
@@ -220,20 +271,34 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
             if (!ui.working) TextButton(enabled = !checkingMusic, onClick = controller::resetConversation) { Text("New chat", color = Color(0xFF9E95AC)) }
         }
 
-        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        // ROUND 15.8 — COMPOSER: one calm card, real hints, and starter ideas when the chat is empty.
+        if (ui.turns.isEmpty() && wf == DirectorWorkflow.ZERO_TO_VIDEO && input.isBlank()) {
+            IdeaChips(onPick = { input = it })
+        }
+        Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), shape = RoundedCornerShape(18.dp),
+            color = Glass, border = BorderStroke(1.dp, Color(0x33FFFFFF))) {
+        Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.Bottom) {
             OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f), enabled = !ui.working && !checkingMusic,
                 placeholder = { Text(if (ui.script.isNotBlank() && !ui.scriptApproved) "Describe script changes…" else if (ui.readyToApply || ui.applied) "e.g. “Scene 2: make it a bar chart”" else "Message the AI Director…", fontSize = 13.sp) },
                 maxLines = 5, shape = RoundedCornerShape(16.dp))
             IconButton(onClick = { if (input.isNotBlank()) { controller.send(input); input = "" } }, enabled = !ui.working && !checkingMusic) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = Cyan) }
         }
+        }
     }
     if (showSettings) KeysDialog(onDismiss = { showSettings = false })
     if (showAgent) AgentDialog(onDismiss = { showAgent = false }, onRun = { goal -> showAgent = false; controller.agentRun(goal) })
-    if (showFlowSetup) com.example.ui.components.FlowAiBrowserDialog(onDismiss = { showFlowSetup = false })
-    if (showBatch) com.example.ui.components.FlowBatchDialog(
-        topic = ui.brief.prompt.ifBlank { input }.ifBlank { "short explainer video" },
-        aspect = ui.brief.aspect ?: "9:16", style = ui.brief.style ?: "",
-        onDismiss = { showBatch = false }, onDone = { controller.attachFlowImages() })
+    if (showFlowSetup) {
+        LaunchedEffect(showFlowSetup) {
+            com.example.flow.web.FlowBrowserActivity.start(ctx, controller.projectId, false, ui.brief.prompt)
+            showFlowSetup = false
+        }
+    }
+    if (showBatch) {
+        LaunchedEffect(showBatch) {
+            controller.prepareFlowPlan(true)
+            showBatch = false
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -333,9 +398,9 @@ private fun KeysDialog(onDismiss: () -> Unit) {
                 OutlinedTextField(searchKey, { searchKey = it }, label = { Text("$provider search API key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 OutlinedTextField(tg, { tg = it }, label = { Text("Telegram bot token (asset library)") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 Text("Status: search ${if (WebResearch.isConfigured(ctx)) "configured" else "not set"}, Telegram ${if (WebResearch.telegramToken(ctx).isNotBlank()) "configured" else "not set"}, AI images ${if (com.example.llm.ImageGen.canGenerate(com.example.studio.ai.AiProfile.fromSettings(ctx).provider, com.example.studio.ai.AiProfile.fromSettings(ctx).apiKey)) "available with your ${com.example.studio.ai.AiProfile.fromSettings(ctx).provider} key" else "need a Gemini/OpenAI/OpenRouter key in Settings"}", fontSize = 11.sp)
-                // Round 10: in-app Flow AI browser (login once) + AI asset tools over imported images.
+                // Round 14: full-screen Flow browser (login any time) + AI asset tools over imported images.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { showFlow = true }) { Text("🌐 Flow AI browser", fontSize = 11.sp) }
+                    OutlinedButton(onClick = { showFlow = true }) { Text("🌐 Flow browser (full screen)", fontSize = 11.sp) }
                     OutlinedButton(onClick = { showTools = true }) { Text("🖼 AI asset tools (${com.example.ui.components.FlowAssetStore.count(ctx)})", fontSize = 11.sp) }
                 }
                 ProductionOptions()
@@ -346,7 +411,12 @@ private fun KeysDialog(onDismiss: () -> Unit) {
                 val ok2 = tg.isBlank() || WebResearch.saveTelegramToken(ctx, tg)
                 Toast.makeText(ctx, if (ok1 && ok2) "Saved securely" else "Secure storage unavailable on this device — nothing was saved", Toast.LENGTH_LONG).show(); onDismiss() }) { Text("Save") } },
             dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } })
-        if (showFlow) com.example.ui.components.FlowAiBrowserDialog(onDismiss = { showFlow = false })
+        if (showFlow) {
+            LaunchedEffect(showFlow) {
+                com.example.flow.web.FlowBrowserActivity.start(ctx, "", false, "")
+                showFlow = false
+            }
+        }
         if (showTools) com.example.ui.components.FlowAssetToolsDialog(onDismiss = { showTools = false })
     }
 }
@@ -551,4 +621,81 @@ private fun SceneThumb(s: com.example.studio.director.Scene, aspect: String) {
         b.asImageBitmap()
     }
     androidx.compose.foundation.Image(bitmap = bmp, contentDescription = "Scene preview", modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)))
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// ROUND 15.8 — small, honest UI pieces used by the zero-to-video screen.
+// ---------------------------------------------------------------------------------------------
+
+/** Five real stages of a video. A dot is filled only when that stage truly exists. */
+@Composable
+private fun StageStrip(
+    hasTopic: Boolean, hasScript: Boolean, scenes: Int,
+    imagesDone: Int, imagesTotal: Int, timelineReady: Boolean, working: Boolean
+) {
+    val steps = listOf(
+        "Topic" to hasTopic,
+        "Script" to hasScript,
+        "Scenes" to (scenes > 0),
+        "Images" to (imagesDone > 0),
+        "Timeline" to timelineReady
+    )
+    val current = steps.indexOfFirst { !it.second }.let { if (it < 0) steps.lastIndex else it }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        steps.forEachIndexed { i, (label, done) ->
+            val active = i == current && !done
+            val bg = when {
+                done -> Color(0xFF10B981).copy(alpha = 0.18f)
+                active -> Purple.copy(alpha = 0.30f)
+                else -> Color(0xFF1B1626)
+            }
+            val fg = when {
+                done -> Color(0xFF6EE7B7)
+                active -> Color(0xFFD9C6FF)
+                else -> Color(0xFF6F6780)
+            }
+            Surface(shape = RoundedCornerShape(9.dp), color = bg, modifier = Modifier.weight(1f)) {
+                Column(Modifier.padding(vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(if (done) "✓" else "${i + 1}", color = fg, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(label, color = fg, fontSize = 9.sp, maxLines = 1)
+                }
+            }
+        }
+    }
+    if (imagesTotal > 0) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            LinearProgressIndicator(progress = { (imagesDone.toFloat() / imagesTotal).coerceIn(0f, 1f) },
+                modifier = Modifier.weight(1f).heightIn(min = 4.dp), color = Cyan)
+            Spacer(Modifier.width(8.dp))
+            Text("$imagesDone/$imagesTotal images", color = Color(0xFF9E95AC), fontSize = 10.sp)
+        }
+    }
+    if (working) Spacer(Modifier.width(1.dp))
+}
+
+/** Starter ideas for the empty chat — tapping only fills the box, nothing runs behind the owner's back. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun IdeaChips(onPick: (String) -> Unit) {
+    val ideas = listOf(
+        "Space: black hole kaise banta hai",
+        "Tech: UPI kaise kaam karta hai",
+        "History: Mughal empire in 60s",
+        "Nature: coral reef ka khatra",
+        "Business: ek brand 30 din mein kaise ugta hai"
+    )
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp)) {
+        Text("YA IN MEIN SE CHUNO", color = Color(0xFF6F6780), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(2.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ideas.forEach { idea ->
+                Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF17131F),
+                    border = BorderStroke(1.dp, Color(0x228B5CF6)), modifier = Modifier.clickable { onPick(idea) }) {
+                    Text(idea, color = Color(0xFFBDB3CC), fontSize = 10.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp))
+                }
+            }
+        }
+    }
 }

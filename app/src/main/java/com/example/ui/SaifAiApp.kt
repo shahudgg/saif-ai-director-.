@@ -93,6 +93,8 @@ fun SaifAiApp(
     var showNewProjectSheet by remember { mutableStateOf(false) }
     // Round 9: the purple mic opens SAIF AI's live conversation, powered by the SAIF AI AUTOMATION engine.
     var showLiveModeSheet by remember { mutableStateOf(false) }
+    // Round 15: 🧰 POWER TOOLS — self test, crash log and 15 utilities, reachable from the header.
+    var showPowerTools by remember { mutableStateOf(false) }
 
     /**
      * A MediaProjection can only be requested from a visible activity, so SAIF AI asks for it and then hands it to
@@ -358,7 +360,8 @@ fun SaifAiApp(
                         isFilterBookmarked = isFilterBookmarked,
                         onToggleBookmarkFilter = { viewModel.toggleBookmarkFilter() },
                         onUpgradeClick = { showUpgradeDialog = true },
-                        onOpenAdminDashboard = onOpenAdminDashboard
+                        onOpenAdminDashboard = onOpenAdminDashboard,
+                        onOpenPowerTools = { showPowerTools = true }
                     )
                 },
                 bottomBar = {
@@ -672,6 +675,17 @@ fun SaifAiApp(
                                 (context.getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE)
                                     as android.media.projection.MediaProjectionManager).createScreenCaptureIntent()
                             )
+                        }
+                    )
+                }
+
+                // Round 15: POWER TOOLS — full screen, above everything.
+                if (showPowerTools) {
+                    com.example.ui.components.SaifPowerToolsScreen(
+                        onClose = { showPowerTools = false },
+                        onStartLiveTest = {
+                            showPowerTools = false
+                            showLiveModeSheet = true
                         }
                     )
                 }

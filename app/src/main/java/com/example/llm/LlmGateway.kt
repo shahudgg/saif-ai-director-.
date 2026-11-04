@@ -50,7 +50,14 @@ object LlmGateway {
         onThinking: (suspend (thoughtChunk: String) -> Unit)? = null
     ): Result<LlmResponse> = callObserved(role, provider, apiKey, model, request, onChunk, onWaiting, onThinking, null)
 
-    /** Same gateway and retries as [call], with an explicit callback for every HTTP/model attempt. */
+    /**
+     * Same gateway and retries as [call], with an explicit callback for every HTTP/model attempt.
+     *
+     * Round 14: when the ACTIVE provider runs out (daily quota, auth, retired model, or too many
+     * per-minute waits) it automatically switches to a saved backup provider — provider, key and model —
+     * so a finished script never dies because one free tier hit its limit. Every switch is honest:
+     * the original error is only returned when every backup has also been tried.
+     */
     suspend fun callObserved(
         role: LlmRole,
         provider: String,
@@ -66,13 +73,15 @@ object LlmGateway {
         val cleanKey = KeyStoreCrypto.decrypt(apiKey).trim()
             .removeSurrounding("\"").removeSurrounding("'").removePrefix("Bearer ").removePrefix("bearer ").trim()
 
-        val profile = ProviderProfile.detectProviderFromKey(cleanKey, provider)
+        var activeProfile = ProviderProfile.detectProviderFromKey(cleanKey, provider)
+        var activeKey = cleanKey
+        var activeProviderName = provider
         var activeModel = model.trim().removePrefix("models/")
         if (activeModel.isBlank()) {
-            activeModel = profile.defaultFallbackModels.firstOrNull() ?: "default"
+            activeModel = activeProfile.defaultFallbackModels.firstOrNull() ?: "default"
         }
-        val isGeminiProfile = profile.id.equals("Gemini", ignoreCase = true)
-        if (isGeminiProfile && (GeminiModelCatalog.isRetired(activeModel) || GeminiModelCatalog.isDead(activeModel))) {
+        if (activeProfile.id.equals("Gemini", ignoreCase = true) &&
+            (GeminiModelCatalog.isRetired(activeModel) || GeminiModelCatalog.isDead(activeModel))) {
             activeModel = GeminiModelCatalog.pick(cleanKey)
         }
 
@@ -86,13 +95,43 @@ object LlmGateway {
         }
 
         var currentRequest = request.copy(
-            reasoningEffort = if (profile.dialect.reasoningPolicy.supportsReasoningEffort) effort else null
+            reasoningEffort = if (activeProfile.dialect.reasoningPolicy.supportsReasoningEffort) effort else null
         )
 
         var shrinkAttempts = 0
         val maxShrinkAttempts = 2
         var modelSwitchCount = 0
         val maxModelSwitches = 2
+        var rateLimitWaits = 0
+        var vendorSwitchCount = 0
+        val maxVendorSwitches = 3
+        val triedProviders = LinkedHashSet<String>()
+        val triedModels = LinkedHashSet<String>()
+        triedProviders.add(activeProfile.id.lowercase())
+        triedModels.add(activeModel.lowercase())
+        var lastError: LlmError? = null
+
+        /** Moves to the next saved backup provider. False = there is nothing left to try. */
+        fun switchProvider(): Boolean {
+            if (vendorSwitchCount >= maxVendorSwitches) return false
+            val next = BackupProviders.next(triedProviders, triedModels) ?: return false
+            val profile = ProviderProfile.getById(next.first)
+            activeProfile = profile
+            activeKey = next.second
+            activeModel = next.third
+            activeProviderName = if (profile.id.equals("Custom", true)) next.first else profile.id
+            triedProviders.add(profile.id.lowercase())
+            triedModels.add(activeModel.lowercase())
+            vendorSwitchCount++
+            modelSwitchCount = 0
+            shrinkAttempts = 0
+            rateLimitWaits = 0
+            currentRequest = currentRequest.copy(
+                reasoningEffort = if (profile.dialect.reasoningPolicy.supportsReasoningEffort) effort else null
+            )
+            Log.i(TAG, "Auto-switched provider to ${profile.id} / $activeModel (limit reached on the previous one)")
+            return true
+        }
 
         while (true) {
             // Estimate tokens and reserve budget
@@ -109,7 +148,7 @@ object LlmGateway {
             }
 
             val allocatedOutput = TokenBudgetManager.reserve(
-                provider = profile.id,
+                provider = activeProfile.id,
                 model = activeModel,
                 inputTokens = estInput,
                 maxOutputTokens = desiredOutput,
@@ -119,8 +158,8 @@ object LlmGateway {
             val callReq = currentRequest.copy(maxTokens = allocatedOutput)
 
             val result = LlmClient.streamDetailedObserved(
-                providerName = if (profile.id == "Custom") provider else profile.id,
-                apiKey = cleanKey,
+                providerName = activeProviderName,
+                apiKey = activeKey,
                 modelName = activeModel,
                 request = callReq,
                 onChunk = onChunk,
@@ -133,10 +172,9 @@ object LlmGateway {
 
             if (result.isSuccess) {
                 val resp = result.getOrNull()!!
-                // Calibrate budget manager with real tokens
                 if (resp.promptTokens != null && resp.completionTokens != null) {
                     TokenBudgetManager.recordActualUsage(
-                        profile.id,
+                        activeProfile.id,
                         activeModel,
                         resp.promptTokens,
                         resp.completionTokens
@@ -146,53 +184,61 @@ object LlmGateway {
             }
 
             val error = result.exceptionOrNull() as? LlmError
-                ?: LlmError(profile.displayName, activeModel, null, result.exceptionOrNull()?.message ?: "Error", LlmErrorCategory.UNKNOWN)
+                ?: LlmError(activeProfile.displayName, activeModel, null, result.exceptionOrNull()?.message ?: "Error", LlmErrorCategory.UNKNOWN)
+            lastError = error
 
             // Case 1: TOO_LARGE (413 / TPM / Context overflow) -> Never resend the same payload!
             if (error.category == LlmErrorCategory.TOO_LARGE) {
                 Log.w(TAG, "TOO_LARGE from $activeModel: ${error.rawMessage}")
-                ModelLimitsStore.recordLimitFromError(profile.id, activeModel, error.scope, error.limitTokens, error.requestedTokens)
+                ModelLimitsStore.recordLimitFromError(activeProfile.id, activeModel, error.scope, error.limitTokens, error.requestedTokens)
 
                 if (shrinkAttempts < maxShrinkAttempts) {
                     shrinkAttempts++
                     Log.i(TAG, "Shrinking payload (attempt $shrinkAttempts of $maxShrinkAttempts)...")
                     onWaiting?.invoke("Request exceeded per-minute limit. Shrinking context (attempt $shrinkAttempts)...", 1)
-
                     currentRequest = shrinkPayload(currentRequest, shrinkAttempts)
                     continue
                 } else if (modelSwitchCount < maxModelSwitches) {
-                    // Try another model with higher limits or smaller footprint
                     modelSwitchCount++
-                    val alt = findAlternativeModel(profile, activeModel)
+                    val alt = findAlternativeModel(activeProfile, activeModel)
                     if (alt != null) {
                         Log.i(TAG, "Switching model from $activeModel to $alt after shrink limit")
                         activeModel = alt
+                        triedModels.add(alt.lowercase())
                         shrinkAttempts = 0
                         continue
                     }
                 }
+                if (switchProvider()) continue
                 return Result.failure(error)
             }
 
-            // Case 2: Daily quota exhausted (TPD / RPD)
+            // Case 2: Daily quota exhausted (TPD / RPD) or provider says the key has no credit
             if (error.category == LlmErrorCategory.RATE_LIMIT && (error.scope == "TPD" || error.scope == "RPD")) {
                 Log.w(TAG, "Daily quota exhausted for $activeModel: ${error.rawMessage}")
-                markModelDead(profile.id, activeModel)
+                markModelDead(activeProfile.id, activeModel)
                 if (modelSwitchCount < maxModelSwitches) {
                     modelSwitchCount++
-                    val alt = findAlternativeModel(profile, activeModel)
+                    val alt = findAlternativeModel(activeProfile, activeModel)
                     if (alt != null) {
                         activeModel = alt
+                        triedModels.add(alt.lowercase())
                         continue
                     }
                 }
+                if (switchProvider()) continue
                 return Result.failure(error)
             }
 
-            // Case 3: Rate limit (TPM/RPM) with retry hint
+            // Case 3: Rate limit (TPM/RPM) with retry hint — wait a few times, then move provider
             if (error.category == LlmErrorCategory.RATE_LIMIT) {
                 val waitSeconds = (error.retryAfterSeconds ?: 3L).coerceIn(1L, 90L)
                 Log.w(TAG, "Rate limited on $activeModel. Waiting ${waitSeconds}s...")
+                rateLimitWaits++
+                if (rateLimitWaits > 4) {
+                    if (switchProvider()) continue
+                    return Result.failure(error)
+                }
                 onWaiting?.invoke("Rate limit cooldown (${waitSeconds}s)", waitSeconds.toInt())
                 delay(waitSeconds * 1000L)
                 continue
@@ -200,14 +246,23 @@ object LlmGateway {
 
             // Case 4: Model not found or deprecated
             if (error.category == LlmErrorCategory.MODEL_NOT_FOUND) {
-                markModelDead(profile.id, activeModel)
-                val alt = if (isGeminiProfile) GeminiModelCatalog.alternative(cleanKey, activeModel, setOf(activeModel))
-                          else findAlternativeModel(profile, activeModel)
-                if (alt != null && modelSwitchCount < (if (isGeminiProfile) 6 else maxModelSwitches)) {
+                markModelDead(activeProfile.id, activeModel)
+                val alt = if (activeProfile.id.equals("Gemini", true))
+                    GeminiModelCatalog.alternative(activeKey, activeModel, triedModels)
+                else findAlternativeModel(activeProfile, activeModel)
+                if (alt != null && modelSwitchCount < (if (activeProfile.id.equals("Gemini", true)) 6 else maxModelSwitches)) {
                     modelSwitchCount++
                     activeModel = alt
+                    triedModels.add(alt.lowercase())
                     continue
                 }
+                if (switchProvider()) continue
+                return Result.failure(error)
+            }
+
+            // Case 5: Auth / permission / unknown provider problem -> another provider may still work
+            if (error.category == LlmErrorCategory.AUTH || error.category == LlmErrorCategory.UNKNOWN) {
+                if (switchProvider()) continue
                 return Result.failure(error)
             }
 

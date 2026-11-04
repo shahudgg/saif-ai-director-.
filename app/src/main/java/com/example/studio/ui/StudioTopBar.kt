@@ -43,7 +43,9 @@ fun StudioTopBar(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onAspectChange: (String) -> Unit,
-    onExportClick: () -> Unit
+    onExportClick: () -> Unit,
+    /** Round 14: browser icon → FULL-SCREEN Flow browser (login/generate/download any time). */
+    onOpenBrowser: () -> Unit = {}
 ) {
     var showAspectMenu by remember { mutableStateOf(false) }
 
@@ -152,6 +154,17 @@ fun StudioTopBar(
                 maxLines = 1,
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
+
+            // Browser icon — opens the full-screen Flow browser (never a dialog, so scroll/zoom work).
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF1B2436))
+                    .clickable { onOpenBrowser() }
+                    .padding(horizontal = 9.dp, vertical = 5.dp)
+            ) {
+                Text("🌐", color = Color(0xFF00E5FF), fontSize = 15.sp)
+            }
 
             // Export Button
             Box(

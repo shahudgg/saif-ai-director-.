@@ -757,6 +757,9 @@ fun AiProviderSettingsInline() {
             }
         }
 
+        // Round 14 — backup providers + automatic switch when a limit is hit.
+        BackupProvidersSection()
+
         // Save Button
         Button(
             onClick = {

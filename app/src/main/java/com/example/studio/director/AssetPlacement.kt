@@ -122,6 +122,30 @@ object AssetPlacements {
         drift = p.drift.coerceIn(0f, 1f)
     )
 
+    /**
+     * ROUND 15.4 — SAFE-AREA clamp for everything that is not a backdrop.
+     *
+     * The owner asked, in plain words, that "kuch bhi screen ke bahar na jaye". A sticker or an inset
+     * picture is therefore pushed (never shrunk into nothing) so its whole rectangle stays inside the
+     * frame with a 4%/6% margin, and its size is capped so that it always fits. Backdrops skip this:
+     * they must cover the entire frame, so bleeding beyond the edge is correct for them.
+     */
+    fun clampSafe(p: AssetPlacement): AssetPlacement {
+        val c = clamp(p)
+        if (c.role == "backdrop") return c
+        val w = c.width.coerceIn(0.08f, 0.92f)
+        val h = c.height.coerceIn(0.08f, 0.86f)
+        val halfW = w / 2f
+        val halfH = h / 2f
+        val minX = 0.04f + halfW
+        val maxX = 0.96f - halfW
+        val minY = 0.06f + halfH
+        val maxY = 0.92f - halfH
+        val x = if (minX <= maxX) c.x.coerceIn(minX, maxX) else 0.5f
+        val y = if (minY <= maxY) c.y.coerceIn(minY, maxY) else 0.49f
+        return c.copy(x = x, y = y, width = w, height = h)
+    }
+
     /** Keyframes must be sorted, unique in time and inside the clip; at most 12 of them. */
     fun sanitizeKeys(keys: List<PlacementKey>, clipMs: Long = Long.MAX_VALUE): List<PlacementKey> {
         val out = keys

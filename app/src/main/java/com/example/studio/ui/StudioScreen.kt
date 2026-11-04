@@ -96,7 +96,13 @@ fun StudioScreen(
                 onUndo = { viewModel.undo() },
                 onRedo = { viewModel.redo() },
                 onAspectChange = { viewModel.setAspect(it) },
-                onExportClick = { showExportDialog = true }
+                onExportClick = { showExportDialog = true },
+                onOpenBrowser = {
+                    // Full-screen Flow browser for this project (an existing plan is picked up automatically).
+                    runCatching {
+                        com.example.flow.web.FlowBrowserActivity.start(appContext, state.project.id, autostart = false)
+                    }
+                }
             )
 
             // 2. Resizable Pro Preview Panel with On-Canvas Gizmo

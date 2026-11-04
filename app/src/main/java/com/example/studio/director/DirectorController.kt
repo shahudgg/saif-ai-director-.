@@ -41,7 +41,9 @@ data class DirectorUi(
     val readyToApply: Boolean = false,
     val applied: Boolean = false,
     /** Validated scene drafts streamed during planning; never persisted or applied as a partial project. */
-    val liveScenes: List<Scene> = emptyList()
+    val liveScenes: List<Scene> = emptyList(),
+    /** Round 14: the scene-by-scene Flow image plan (prompts + generated pictures + verifications). */
+    val flowPlan: com.example.flow.FlowPlan? = null
 )
 
 /** Persists one conversation per (project, workflow) so users can leave and come back. */
@@ -173,7 +175,15 @@ class DirectorController(
     }
     private var footageNarration: List<Triple<Long, Long, String>> = emptyList()
 
-    init { if (_ui.value.turns.isEmpty()) greet() else if (_ui.value.working) update { copy(working = false, status = null) } }
+    init {
+        if (_ui.value.turns.isEmpty()) greet() else if (_ui.value.working) update { copy(working = false, status = null) }
+        // Round 14: the full-screen Flow browser hands the finished plan back here.
+        runCatching { com.example.flow.FlowBridgeBus.onPlanReady = { plan, applyNow -> onFlowPlanReady(plan, applyNow) } }
+        runCatching {
+            val saved = com.example.flow.FlowPlanStore.load(appContext, projectId)
+            if (saved != null) update { copy(flowPlan = saved) }
+        }
+    }
 
     @Synchronized
     private fun update(f: DirectorUi.() -> DirectorUi) {
@@ -421,6 +431,12 @@ class DirectorController(
         } } }
     }
 
+    /**
+     * ROUND 15.1 — when the agent opens Flow by itself, nobody taps "Add to timeline" afterwards: the browser
+     * hands the finished plan back through the bridge and this flag makes the controller also apply it.
+     */
+    @Volatile private var pendingAutoFinish = false
+
     private suspend fun guarded(block: suspend () -> Unit) {
         try { block() } catch (e: CancellationException) { throw e }
         catch (e: Exception) { fail(e.message ?: "Unexpected error") }
@@ -503,15 +519,30 @@ class DirectorController(
             say("🤖 Brief + script ready (" + SpeechTiming.countWords(script) + " words, " + (b.durationSec ?: 60) + "s, " + (b.aspect ?: "9:16") + "). ASSEMBLER ab plan + AI key visuals + narration + timeline banayega…")
             produceFromScript(script)
             gate()
-            val flowCount = com.example.ui.components.FlowAssetStore.items(appContext).count { it.type == "image" }
-            if (flowCount > 0 && _ui.value.manifest != null && _ui.value.readyToApply) {
-                val mm = _ui.value.manifest!!
-                crew.supervised(AgentRole.PLACER, "Flow ki " + flowCount + " images ko scenes pe fix kar raha hai", "",
-                    fallbackNote = "Order-based placement skip — AI key visuals hi use honge.") {
-                    placeFlowImages(mm)
-                    Result.success(Unit)
+            // Round 14: if the owner already ran the Flow pipeline, its verified pictures + transitions win.
+            val storedPlan = com.example.flow.FlowPlanStore.load(appContext, projectId)
+            val flowReady = storedPlan != null && storedPlan.slots.any { it.imagePath.isNotBlank() && File(it.imagePath).exists() }
+            if (flowReady && storedPlan != null && _ui.value.manifest != null) {
+                crew.supervised(AgentRole.PLACER, "Flow ki " + storedPlan.slots.count { it.imagePath.isNotBlank() } +
+                    " pictures ko scenes + transitions ke saath lagaya ja raha hai", "",
+                    fallbackNote = "Flow placement skip — AI key visuals hi use honge.") {
+                    try {
+                        applyFlowPlanInternal(storedPlan, applyNow = false)
+                        Result.success(Unit)
+                    } catch (e: Exception) {
+                        Result.failure<Unit>(e)
+                    }
                 }
                 gate()
+            } else if (_ui.value.manifest != null) {
+                // ROUND 15.1: the crew opens Flow AI itself. No tap, no "Flow images (auto)" button.
+                say("🌐 SAIF ab khud Flow AI khol raha hai — aapko kuch tap karna nahi hai. Login ek baar karna pade " +
+                    "to kar lena (jab chaho, kitni bhi baar), uske baad ye saare prompts khud generate honge.")
+                update { copy(working = false) }
+                say("▶️ Flow browser khul gaya. SAIF ek-ek prompt type karke Flow ka ARROW khud dabayega (confirm hone " +
+                    "tak dobara try), 8s gap pe images download + verify karega, phir scenes pe lagakar timeline bana dega.")
+                prepareFlowPlan(autoStart = true, autoFinish = true)
+                return@guarded
             }
             if (_ui.value.readyToApply) {
                 applyToTimeline()
@@ -551,12 +582,28 @@ class DirectorController(
     private suspend fun produceFromScript(script: String) {
         ensureSeed()
         val b = _ui.value.brief
+        // ROUND 16.0 — say out loud which art direction the topic produced.
+        runCatching {
+            val dir = com.example.studio.composer.TopicStyle.forTopic(
+                listOf(b.prompt, b.style.orEmpty(), b.audience.orEmpty(), b.userScript).joinToString(" "))
+            say("🎬 Art direction: " + dir.domain.label + " — palette family, layout grammar aur camera usi duniya ke hisaab se set hain.")
+        }
         status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations")
         val epoch = beginStoryboard()
-        var manifest = services.planManifest(b, script,
+        // ROUND 16.1 — planning repairs itself. A repeated scene is rebuilt in place; if a repeat still
+        // reaches this level, planning is retried automatically once, so the owner never has to type a retry.
+        suspend fun planOnce() = services.planManifest(b, script,
             onProgress = { i, n -> status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations", (i - 1f) / n, "Batch $i of $n") },
-            onSceneAccepted = { _, scene -> publishStoryboard(epoch, scene) }
-        ).getOrElse { fail("Scene planning failed: ${it.message}"); return }
+            onSceneAccepted = { _, scene -> publishStoryboard(epoch, scene) })
+        var planned = planOnce()
+        if (planned.isFailure) {
+            val msg = planned.exceptionOrNull()?.message.orEmpty()
+            if (listOf("repeat", "unique", "uniqueness", "design of scene").any { msg.contains(it, ignoreCase = true) }) {
+                say("🔁 Ek scene repeat ho gayi thi — poora plan reject nahi kiya. Automatic retry chal raha hai, aapko kuch type karne ki zaroorat nahi.")
+                planned = planOnce()
+            }
+        }
+        var manifest = planned.getOrElse { fail("Scene planning failed: ${it.message}"); return }
         gate()
         services.lastPlanNote.takeIf { it.isNotBlank() }?.let { say(it) }
         update { copy(manifest = manifest, liveScenes = emptyList()) }
@@ -770,8 +817,247 @@ class DirectorController(
      * play hongi. Agar plan abhi nahi bana to images library mein rehte hain aur agle run mein hunter unhe
      * keyword match karke khud place kar dega.
      */
+    /**
+     * Round 14 — "Flow images (auto)": builds ONE prompt per scene from the approved script (plus key visuals),
+     * saves the plan, and opens the full-screen Flow browser which generates them one by one with an 8 s gap,
+     * downloads + verifies every picture, and hands the plan back to [onFlowPlanReady].
+     */
+    fun prepareFlowPlan(autoStart: Boolean = true, autoFinish: Boolean = false) {
+        // ROUND 15.6 — NO-LOGIN PATH. When the owner has an image-capable API key (Gemini / OpenAI /
+        // OpenRouter / custom), the pictures are generated inside the app in the background: no Flow
+        // browser, no Google account, nothing to log into. The Flow browser stays available as the
+        // fallback when no key is configured.
+        val profile = runCatching { com.example.studio.ai.AiProfile.fromSettings(appContext) }.getOrNull()
+        if (profile != null && com.example.llm.ImageGen.canGenerate(profile.provider, profile.apiKey) && !_ui.value.working) {
+            say("API key mil gaya — images app ke andar background mein ban jayengi (Flow login ki zaroorat nahi).")
+            generateImagesInApp(autoFinish = autoFinish)
+            return
+        }
+        val m = _ui.value.manifest ?: run {
+            say("Pehle scene plan banao (🤖 SAIF Agent ya Confirm & start), phir Flow prompts usi script se banenge.", error = true)
+            return
+        }
+        if (_ui.value.working) return
+        update { copy(working = true, problems = emptyList()) }
+        job = scope.launch { guarded {
+            status(DirectorStage.FINDING_ASSETS, "Script ke scenes se image prompts ban rahe hain", detail = "scene by scene")
+            // FLOW agent, supervised: one prompt per scene from the narration; the local builder is the declared fallback.
+            val r = AgentOrchestrator(activityBus).supervised(
+                AgentRole.FLOW, "scene-by-scene image prompts",
+                detail = "${m.scenes.size} scenes · narration se, topic se nahi",
+                fallbackNote = "local prompt builder (scene ki narration) use hoga"
+            ) { services.buildFlowPlan(projectId, _ui.value.brief, m, _ui.value.script) }
+            val plan = r.getOrElse { fail("Flow prompts nahi bane: ${it.message}"); return@guarded }
+            gate()
+            com.example.flow.FlowPlanStore.save(appContext, plan)
+            update { copy(working = false, flowPlan = plan,
+                status = JobStatus(DirectorStage.FINDING_ASSETS, plan.slots.size.toString() + " Flow prompts ready")) }
+            say("🖼 ${plan.slots.size} image prompts tayyar — har scene ke narration se, topic se nahi.\n" +
+                plan.notes.joinToString("\n") + "\n\nFlow browser khul raha hai. Login karo (jab chaho — koi one-time lock nahi), " +
+                "phir Start dabao: SAIF khud ek-ek prompt generate karega (8 s gap), download karega aur verify karega.")
+            pendingAutoFinish = autoFinish
+            com.example.flow.web.FlowBrowserActivity.start(appContext, projectId, autoStart, _ui.value.brief.prompt, autoFinish)
+        } }
+    }
+
+    /**
+     * ROUND 15.6 — BACKGROUND IMAGE RUN (NO LOGIN).
+     *
+     * Generates one key visual per scene with the owner's OWN provider key (Gemini "Nano Banana" class
+     * models, OpenAI gpt-image, OpenRouter or any OpenAI-compatible base URL), saves every picture, places
+     * it as a planned full-frame backdrop, rebuilds the timeline and — when asked — applies it.
+     *
+     * Nothing here touches a browser: there is no Google account, no Flow session and no temp-mail step.
+     * Anything that fails is reported with the provider's own words; nothing is faked.
+     */
+    fun generateImagesInApp(autoFinish: Boolean = false) {
+        val m = _ui.value.manifest ?: run {
+            say("Pehle scene plan banao (🤖 SAIF Agent ya Confirm & start), phir images banengi.", error = true)
+            return
+        }
+        if (_ui.value.working) return
+        update { copy(working = true, problems = emptyList()) }
+        job = scope.launch { guarded {
+            val b = _ui.value.brief
+            val profile = com.example.studio.ai.AiProfile.fromSettings(appContext)
+            status(DirectorStage.GENERATING_ANIMATIONS, "Background images (koi login nahi)", detail = "0/${m.scenes.size}")
+            val (gen, note) = services.generateSceneImages(b, m) { i, n, t ->
+                status(DirectorStage.GENERATING_ANIMATIONS, "Image $i/$n", i.toFloat() / n, t)
+            }
+            gate()
+            note?.let { say(it) }
+            if (gen.isEmpty()) {
+                update { copy(working = false) }
+                say("Image generate nahi hui — provider key check karo (Settings → API provider). " +
+                    "Kuch bhi delete nahi hua.", error = true)
+                return@guarded
+            }
+            assets = assets.filterNot { it.source.startsWith("ai-image:") } + gen
+            val (boundedManifest0, boundedAssets) = OverlayBoundary.apply(m, assets, b.aspect ?: "9:16")
+            assets = boundedAssets
+            val review = SceneReview.review(boundedManifest0, b.aspect ?: "9:16")
+            val boundedManifest = review.manifest
+            if (review.lines.isNotEmpty()) say("🔍 Scene review: " + review.lines.joinToString(" · "))
+            store.saveArtifacts(projectId, workflow, narrationClips, assets)
+            status(DirectorStage.BUILDING_TIMELINE, "Timeline ban raha hai")
+            val (assembled, probs) = TimelineAssembler.assemble(getProject(), boundedManifest, narrationClips, assets,
+                captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
+                sfx = SfxFiles.render(appContext, boundedManifest, library = { kind -> sfxLibrary(kind) }),
+                captionStyle = BrandKit.captionStyle(appContext))
+            val (p, musicNotes) = attachCheckedMusic(assembled, m, b)
+            gate()
+            pendingProject = p
+            update { copy(problems = probs + musicNotes, working = false, readyToApply = true,
+                status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "${gen.size} background images ready (no login)")) }
+            val model = com.example.llm.ImageGen.imageModel(profile.provider, profile.activeModel)
+            say("✅ " + gen.size + " images app ke andar background mein ban gayi — Flow login ki zaroorat nahi.\n" +
+                "• Model: " + model + "\n" +
+                "• Har image full-frame backdrop hai, scene ke animation uske upar chalte hain.\n" +
+                (if (probs.isNotEmpty() || musicNotes.isNotEmpty())
+                    "• Notes: " + (probs + musicNotes).take(5).joinToString(" | ") + "\n" else "") +
+                "Timeline ready — 'Add to timeline' dabao (ya already lag gaya).")
+            if (autoFinish) applyToTimeline()
+        } }
+    }
+
+    /**
+     * Flow browser se aaya hua plan: transitions + placement ko manifest mein daalta hai, assets ko scene-wise
+     * resolve karta hai aur (agar bole) seedha timeline pe apply kar deta hai.
+     */
+    fun onFlowPlanReady(plan: com.example.flow.FlowPlan, applyNow: Boolean = false) {
+        val auto = applyNow || pendingAutoFinish
+        pendingAutoFinish = false
+        if (_ui.value.working && !auto) { say("Abhi ek kaam chal raha hai — Flow plan save ho gaya, thodi der baad lag jayega."); return }
+        if (_ui.value.manifest == null) {
+            update { copy(flowPlan = plan) }
+            say("Flow plan save ho gaya (" + plan.slots.size + " prompts) — scene plan banne ke baad ye pictures khud lag jayengi.", error = true)
+            return
+        }
+        say("📥 Flow ne pictures de di hain — SAIF unhe scenes pe laga raha hai.")
+        job = scope.launch { guarded { applyFlowPlanInternal(plan, auto) } }
+    }
+
+    /** Shared by the browser hand-off and the SAIF Agent crew (so the crew waits for it). */
+    suspend fun applyFlowPlanInternal(plan: com.example.flow.FlowPlan, applyNow: Boolean = false) {
+        val m = _ui.value.manifest ?: run { update { copy(flowPlan = plan) }; return }
+        run {
+            update { copy(working = true, flowPlan = plan) }
+            status(DirectorStage.CHECKING_ASSETS, "Flow pictures ko scene-wise lagaya ja raha hai")
+            // ROUND 15.2: a slot is usable when its downloaded picture OR its local transparent cut-out exists.
+            fun slotPath(slot: com.example.flow.FlowSlot): String {
+                if (slot.cutPath.isNotBlank() && File(slot.cutPath).exists()) return slot.cutPath
+                if (slot.imagePath.isNotBlank() && File(slot.imagePath).exists()) return slot.imagePath
+                return ""
+            }
+            val usable = plan.slots.filter { slotPath(it).isNotBlank() }
+            if (usable.isEmpty()) {
+                update { copy(working = false) }
+                say("Flow plan mein abhi koi downloaded picture nahi hai — browser mein Start dabao. Kuch bhi delete nahi hua.", error = true)
+                return@run
+            }
+            // Transition plan (measured from the real pixels) → manifest scenes.
+            val orderedSceneIds = plan.slots.filter { it.review != null }.sortedBy { it.index }.map { it.sceneId }.distinct()
+            val transitionsByScene = HashMap<String, com.example.flow.FlowTransition>()
+            plan.transitions.forEach { t ->
+                val sceneId = orderedSceneIds.getOrNull(t.toIndex) ?: return@forEach
+                transitionsByScene[sceneId] = t
+            }
+            val newScenes = m.scenes.map { sc ->
+                val t = transitionsByScene[sc.id] ?: return@map sc
+                val type = if (t.type in SUPPORTED_TRANSITIONS) t.type else "fade"
+                sc.copy(transitionIn = type, transitionMs = t.ms.coerceIn(200L, 900L))
+            }
+            val newManifest = m.copy(scenes = newScenes)
+            // Resolve every picture with its measured placement.
+            // ROUND 15.4 — older plans (or a slot whose picture arrived before layout planning existed) get
+            // their layout computed here, so every picture still lands on a planned, in-frame rectangle.
+            val placed = usable.map { slot ->
+                if (slot.layout.isBlank())
+                    slot.copy(layout = com.example.flow.FlowLayoutPlanner.plan(slot, slot.sceneMs, plan.aspect).toJson())
+                else slot
+            }
+            val add = placed.map { slot ->
+                val transition = transitionsByScene[slot.sceneId]?.type ?: "fade"
+                val placement = com.example.flow.FlowPlacement.forSlot(slot, slot.sceneMs, transition)
+                val path = slotPath(slot)
+                val cut = slot.cutPath.isNotBlank() && path == slot.cutPath
+                ResolvedAsset(
+                    sceneId = slot.sceneId, requestId = "flow-" + slot.index, kind = "image",
+                    localPath = path, source = "flow-ai:" + (slot.review?.paletteHex ?: ""),
+                    verified = true,
+                    note = slot.role + (if (cut) " · background removed" else "") +
+                        " · " + (slot.review?.verdict ?: "verified") +
+                        (slot.review?.aiVerdict?.takeIf { it.isNotBlank() }?.let { " · AI: " + it } ?: ""),
+                    ext = if (path.endsWith(".jpg", true)) "jpg" else "png",
+                    transparent = cut,
+                    placement = placement
+                )
+            }
+            // KEYFRAME/STICKER slots become floating cut-outs on the same scene; backgrounds replace old Flow assets.
+            assets = assets.filterNot { it.requestId.startsWith("flow-") } + add
+            // ROUND 15.7 — every floating layer of a scene is laid inside ONE animated boundary card, so
+            // 3-4 overlays per scene sit on a designed grid instead of on top of each other.
+            val (boundedManifest0, boundedAssets) = OverlayBoundary.apply(newManifest, assets, plan.aspect)
+            assets = boundedAssets
+            val review = SceneReview.review(boundedManifest0, plan.aspect)
+            val boundedManifest = review.manifest
+            if (review.lines.isNotEmpty()) say("🔍 Scene review: " + review.lines.joinToString(" · "))
+            store.saveArtifacts(projectId, workflow, narrationClips, assets)
+            val b = _ui.value.brief
+            val (assembled, probs) = TimelineAssembler.assemble(getProject(), boundedManifest, narrationClips, assets,
+                captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
+                sfx = SfxFiles.render(appContext, boundedManifest, library = { kind -> sfxLibrary(kind) }),
+                captionStyle = BrandKit.captionStyle(appContext))
+            val (p, musicNotes) = if (workflow == DirectorWorkflow.ZERO_TO_VIDEO) attachCheckedMusic(assembled, boundedManifest, b) else assembled to emptyList()
+            gate()
+            pendingProject = p
+            update { copy(manifest = boundedManifest, problems = probs + musicNotes, working = false, readyToApply = true,
+                status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "${usable.size} Flow pictures ready")) }
+            say(flowReport(plan, usable.size, boundedManifest.scenes.size))
+            if (applyNow) applyToTimeline()
+        }
+    }
+
+    /** Honest report of what was really measured, not a generic success line. */
+    private fun flowReport(plan: com.example.flow.FlowPlan, used: Int, sceneCount: Int): String {
+        val reviews = plan.slots.mapNotNull { it.review }
+        val lowCrop = reviews.count { it.cropLoss <= 0.15f }
+        val glow = reviews.count { it.needsGlow }
+        val bg = reviews.count { it.needsBgRemove }
+        val soft = reviews.count { it.sharpness < 0.12f }
+        val ai = plan.slots.mapNotNull { it.review?.aiVerdict?.takeIf { v -> v.isNotBlank() } }
+        val trans = plan.transitions.joinToString(" · ") { it.type }
+        return buildString {
+            append("✅ Flow pipeline: ").append(used).append("/").append(plan.slots.size).append(" pictures scenes pe lagi (")
+            append(sceneCount).append(" scenes).\n")
+            append("• Crop: ").append(lowCrop).append("/").append(reviews.size).append(" pictures 9:16 mein safe (baaki Ken-Burns ke saath adjust).\n")
+            if (glow > 0) append("• Glow: ").append(glow).append(" dark/flat picture pe neon glow laga.\n")
+            if (bg > 0) append("• Background remove-able: ").append(bg).append(" cut-out key visual chroma-key ke saath lagi.\n")
+            if (soft > 0) append("• ").append(soft).append(" picture(s) soft hain — 1080p pe thodi blur dikh sakti hain.\n")
+            if (ai.isNotEmpty()) append("• AI vision check: ").append(ai.first().take(100)).append("\n")
+            if (trans.isNotEmpty()) append("• Transitions (pixels se): ").append(trans.take(180)).append("\n")
+            // ROUND 15.4 — no invented facts: only layouts that really exist are described.
+            val layouts = plan.slots.mapNotNull { s -> com.example.flow.SlotLayout.fromJson(s.layout) }
+            val floats = layouts.count { !it.isBackdrop }
+            if (layouts.isNotEmpty()) {
+                append("• Placement plan: ").append(layouts.size).append(" pictures — ")
+                append(floats).append(" floating layers safe area ke andar, ")
+                append(layouts.size - floats).append(" full-frame backdrops.\n")
+            }
+            append("Sab kuch timeline pe editable hai — 'Add to timeline' dabao (ya already apply ho gaya).")
+        }
+    }
+
     fun attachFlowImages() {
-        val m = _ui.value.manifest ?: run { say("Pehle ek plan banao (🤖 SAIF Agent ya Confirm & start). Flow images abhi sirf library mein add hue hain — agle run mein khud aa jayenge.", error = true); return }
+        val stored = com.example.flow.FlowPlanStore.load(appContext, projectId) ?: _ui.value.flowPlan
+        if (stored != null && stored.slots.any { it.imagePath.isNotBlank() }) {
+            onFlowPlanReady(stored, applyNow = false)
+            return
+        }
+        val m = _ui.value.manifest ?: run {
+            say("Pehle ek plan banao (🤖 SAIF Agent ya Confirm & start). Flow images abhi sirf library mein add hui hain — agle run mein khud aa jayengi.", error = true)
+            return
+        }
         if (_ui.value.working) return
         job = scope.launch { guarded { placeFlowImages(m) } }
     }
@@ -833,6 +1119,7 @@ class DirectorController(
             throw e
         }
         update { copy(applied = true, readyToApply = false) }
+        runCatching { com.example.power.SaifToolkit.Counters.bump(appContext, "videos_applied") }
         say("Added to your timeline. Press Play in the editor to preview. You can reopen this chat any time to revise scenes.")
     }
 
@@ -855,7 +1142,11 @@ class DirectorController(
     private fun uniqueRedesign(beat: Beat, scenes: List<Scene>, variant: Int, accent: String?): SceneGraph? {
         val base = StyleDNA.fromBrief(_ui.value.brief)
         val dna = base.copy(variantShift = (base.variantShift + variant).mod(3))
-        return SceneVarietyComposer.unique(beat, aspectOf(), dna, accent, scenes.mapNotNull { it.graph })
+        val accepted = scenes.mapNotNull { it.graph }
+        return SceneVarietyComposer.unique(beat, aspectOf(), dna, accent, accepted)
+            // ROUND 16.1 — restyling never dead-ends: the last resort rebuilds from a fresh reserved slot.
+            ?: SceneVarietyComposer.fromSlot(beat, aspectOf(), dna, accent, accepted,
+                com.example.studio.composer.DesignPlan.plan(accepted.size + 1, dna, emptyList()).last())
     }
 
     /** Replaces one scene's layout with the next local design variant. Narration, timing and all other scenes stay untouched. */

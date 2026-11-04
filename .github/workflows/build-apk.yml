@@ -125,3 +125,16 @@ jobs:
         name: "SAIF AI Director - debug APK (auto-build)"
         prerelease: true
         files: app/build/outputs/apk/debug/app-debug.apk
+
+    # Rollout safety: a build-specific release tag, so a fresh link ALWAYS points at that exact build
+    # (the rolling tag above can keep serving an older asset when the upload silently fails).
+    - name: Publish APK to a build-specific release
+      if: success()
+      continue-on-error: true
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: saif-build-${{ github.run_number }}
+        name: "SAIF AI build ${{ github.run_number }}"
+        body: "commit ${{ github.sha }} · branch ${{ github.ref_name }}"
+        prerelease: true
+        files: app/build/outputs/apk/debug/app-debug.apk

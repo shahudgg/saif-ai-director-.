@@ -63,6 +63,8 @@ fun SaifHeader(
     onToggleBookmarkFilter: () -> Unit,
     onUpgradeClick: () -> Unit,
     onOpenAdminDashboard: () -> Unit = {},
+    /** Round 15: 🧰 opens SAIF POWER TOOLS (self test, crash log, 15 utilities). */
+    onOpenPowerTools: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Phones are narrow: below 480 dp the header switches to a compact layout.
@@ -312,6 +314,11 @@ fun SaifHeader(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
+                    }
+
+                    // Power tools (Round 15): every subsystem's status in one place.
+                    IconButton(onClick = onOpenPowerTools, modifier = Modifier.size(iconBtn)) {
+                        Text("🧰", fontSize = 15.sp)
                     }
 
                     // Settings Button

@@ -79,7 +79,10 @@ object ProviderRegistry {
         Capability.WEB_SEARCH -> "No web-search provider is configured, so live research is unavailable. The script will be written from model knowledge and marked unverified."
         Capability.IMAGE_UNDERSTANDING -> "The configured provider cannot analyze images, so asset relevance can only be checked by metadata, not visually."
         Capability.VIDEO_UNDERSTANDING -> "The configured provider cannot ingest video; frames will be sampled and analyzed as images instead."
-        Capability.IMAGE_GENERATION -> "No image-generation provider is configured; procedural graphics will be used instead."
+        Capability.IMAGE_GENERATION ->
+            "No image-generation provider is configured; procedural graphics will be used instead. " +
+                "Add a free Gemini key from Google AI Studio (aistudio.google.com/apikey) in Settings and the " +
+                "pictures are generated inside the app — no Flow browser and no Google login needed."
         Capability.AUDIO_TRANSCRIPTION -> "No speech-to-text provider (Groq, OpenAI or Gemini key) is configured, so audio cannot be transcribed. I will not invent a transcript."
         Capability.SPEECH_SYNTHESIS -> "No speech-synthesis engine is available on this device."
         Capability.FORCED_ALIGNMENT -> "No forced-alignment provider; sentence-level timing from measured audio durations will be used."

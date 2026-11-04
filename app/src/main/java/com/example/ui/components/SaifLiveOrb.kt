@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -232,6 +233,42 @@ fun SaifLiveConversationPanel(
                         .pointerInteropFilter { ev -> if (ev.action == MotionEvent.ACTION_UP) { onClose(); true } else ev.action == MotionEvent.ACTION_DOWN },
                     contentAlignment = Alignment.Center
                 ) { Icon(Icons.Default.Close, "Band karein", tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(20.dp)) }
+            }
+
+            // Round 15: honest status line — a silent orb that "looks alive" was the exact complaint.
+            val connection by SaifAutomation.connectionStatus.collectAsState()
+            val liveErrorState by SaifAutomation.liveError.collectAsState()
+            Text(
+                text = when {
+                    liveErrorState != null -> "engine error"
+                    connection.isBlank() -> "connecting…"
+                    else -> connection.lowercase()
+                },
+                color = if (liveErrorState != null) androidx.compose.ui.graphics.Color(0xFFFF8F8F)
+                else androidx.compose.ui.graphics.Color(0xFF9E95AC),
+                fontSize = 10.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+            )
+            liveErrorState?.let { err ->
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        err.title + ": " + err.message,
+                        color = androidx.compose.ui.graphics.Color(0xFFFF8F8F), fontSize = 11.sp,
+                        textAlign = TextAlign.Center, maxLines = 3
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TextButton(onClick = {
+                            SaifAutomation.clearLiveError()
+                            SaifAutomation.startLive(context, SaifAutomation.liveMode.value, false)
+                        }) { Text("Retry", color = androidx.compose.ui.graphics.Color(0xFF00E5FF), fontSize = 11.sp) }
+                        TextButton(onClick = { SaifAutomation.openHostSettings() }) {
+                            Text(err.actionText.lowercase(), color = androidx.compose.ui.graphics.Color(0xFFC084FC), fontSize = 11.sp)
+                        }
+                    }
+                }
             }
 
             // The orb: the real automation 3D orb, hosted by SAIF AI.

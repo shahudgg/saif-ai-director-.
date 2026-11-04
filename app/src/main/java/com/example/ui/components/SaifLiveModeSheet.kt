@@ -1,6 +1,9 @@
 package com.example.ui.components
 
 import android.content.Context
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -23,6 +26,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +57,26 @@ fun SaifLiveModeSheet(
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Round 15: the microphone is a runtime permission. Before this, tapping "Normal voice" started the
+    // engine with no mic grant, AudioRecord failed and the session died silently.
+    var startAfterGrant by remember { mutableStateOf(false) }
+    val micLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && startAfterGrant) {
+            startAfterGrant = false
+            startNormal(context, isLightMode, onDismiss)
+        } else if (!granted) {
+            startAfterGrant = false
+            Toast.makeText(context, "Microphone permission ke bina live baatcheet nahi chalegi.", Toast.LENGTH_LONG).show()
+        }
+    }
+    fun startWithMic() {
+        val granted = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) startNormal(context, isLightMode, onDismiss)
+        else { startAfterGrant = true; micLauncher.launch(android.Manifest.permission.RECORD_AUDIO) }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Color(0xFF0D0B18)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 30.dp)) {
@@ -76,7 +103,7 @@ fun SaifLiveModeSheet(
                 subtitle = SaifAutomation.LiveMode.NORMAL.description,
                 icon = Icons.Default.GraphicEq,
                 gradient = listOf(Color(0xFF8B5CF6), Color(0xFF6D28D9))
-            ) { startNormal(context, isLightMode, onDismiss) }
+            ) { startWithMic() }
 
             Spacer(Modifier.height(12.dp))
 
@@ -93,7 +120,10 @@ fun SaifLiveModeSheet(
 /** Starts the engine in normal (voice only) mode. Returns true when the session really started. */
 fun startNormal(context: Context, isLightMode: Boolean, onDismiss: () -> Unit): Boolean {
     val ok = SaifAutomation.startLive(context, SaifAutomation.LiveMode.NORMAL, isLightMode)
-    if (ok) SaifLiveSession.isHostPanelOpen = true
+    if (ok) {
+        SaifLiveSession.isHostPanelOpen = true
+        com.example.power.SaifToolkit.Counters.bump(context, "live_sessions")
+    }
     onDismiss()
     return ok
 }

@@ -52,6 +52,18 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
   `AnimPose` — the placement box, glow/blur/grade and entrance/exit), captions. `studio/export/` — video+audio export.
 - `studio/audio/` — `AudioMixer`, `NarrationPolish` (silence trim, fades), `SfxSynth`. `studio/ui/` — Compose screens (`SaifDirectorScreen`, `StudioPreviewPanel`, `StudioSceneLayers`…).
 - `ui/components/TelegramAssetManager.kt`, `TelegramCatalogStore.kt` — Telegram library (sync, caption parsing, download, ranking).
+- **Round 14 — `flow/` package (the ONLY way Flow pictures reach a video):** `FlowModels.kt` (`FlowSlot`/`FlowPlan`/`FlowReview`/
+  `FlowTransition`, roles + statuses, JSON), `FlowStore.kt` (`FlowLibrary` = file index with hash/pixels/prompt, `FlowPlanStore`,
+  `FlowSettings` — 8 s minimum gap), `FlowMedia.kt` (`FlowMediaRules` = what may NEVER be an asset, `FlowDownloader` = cookie-aware
+  download + blob/base64 chunks + dedupe, `FlowImageProbe` = crop/focal/brightness/detail/corner measurements), `FlowPrompts.kt`
+  (`FlowPromptPlanner`: one prompt per scene from the narration, key visual every 3rd scene, local fallback), `FlowAutopilot.kt`
+  (`FlowDriver` interface + the arm→submit→wait→download→verify→8 s loop), `FlowTransitions.kt` (pixel-driven transitions +
+  `FlowPlacement.forSlot`), `FlowBridgeBus.kt` (browser → director hand-off). `flow/web/`: `FlowBrowserActivity` (full-screen window),
+  `FlowWebSession` (cookies/login/logout/zoom/downloads/JS bridge), `FlowJs.kt` (SETUP/CAPTURE/STATE/SUBMIT/ARM).
+- `termux/TermuxBridge.kt` — Termux RUN_COMMAND + app-shell fallback + presets. `llm/BackupProviders.kt` +
+  `ui/components/BackupProvidersSection.kt` — cross-provider auto-switch when a limit is hit.
+- `ui/components/FlowAiStudio.kt` — `FlowAssetStore` facade over `FlowLibrary` (fileId stays `local:<path>`) + AI asset tools;
+  its old dialogs now only launch the Activity (the in-dialog WebView is gone — it is what broke scroll/zoom).
 - `llm/`, `studio/ai/` — provider-agnostic LLM client (Gemini, OpenAI, Anthropic, Groq, OpenRouter, custom). Other packages (`agent/`, `builder/`, `compiler/`, `data/`) are the rest of the app.
 - **Round 9 app-wide backends:** `utils/SaifVoice.kt` (ONE voice for chat + live + video; **SAIF ADVANCE VOICE** is the default),
   `util/SaifMemoryCore.kt` (memory recall tagged per feature, mirrored into the automation engine's Room bank),
@@ -70,7 +82,15 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 4. **Scenes** (`planManifest`): `BeatPlanner.outline` splits the script at sentences/clauses; the **model designs every scene** (`sceneBatchV2`, 3 scenes per call, each with its own facts + suggested layout) and its output must pass `SceneValidator`, `SceneLint`, `LayoutEngine` **and `SceneUniqueness`** (retries with the exact problem, including "scene 5 repeats the design of scene 2"). Only a scene that still fails uses `SceneComposer`, which itself rotates 27 `SceneArchetypes`. `lastPlanNote` reports any pair of scenes that still look alike.
 5. **Narration** (`synthNarration`): consecutive scenes that belong to one sentence are voiced **as one clip** (`VoiceGroups`, `NarrationClip.groupIds`); `SceneTiming.retimeGrouped` shares the real clip length between them. Voice = the app-wide voice from `utils/SaifVoice` (**SAIF ADVANCE VOICE** by default, the same one the chat and the live conversation use) through device TTS, silence-trimmed (`NarrationPolish`). The script prompt also carries `SaifMemoryCore.promptBlock(VIDEO)`, so a repeat owner is not asked to explain their channel again.
 6. **Assets** (`huntAssets`, Round 9 — **one asset at a time**, never one big list): Telegram is synced once, `HuntSlots.build` turns the real manifest into an ordered list of places to fill (each scene's picture first, then its sound cues), and for each slot the loop runs up to 3 tries: ask for ONE need (**2–3 keywords + one file format**) → `AssetLibrary.search` (strict format first, then relaxed) → `TelegramAssetManager.downloadCandidate` → `AssetVerifier.verifyForHunt` (vision check *in the situation it will be cut into*: narration + cue time + `visualObjective`) → on reject take `betterKeywords` and search again → on accept place it and move to the next slot. A need the model says is unnecessary becomes an upload request on Telegram (`AssetRequester`, once per day per need). No model → `AssetHunter.seedNeed` (keywords from the narration). Every decision is logged in `lastHuntLog` and shown in the chat report. `curateAssets` still exists but is no longer called.
-7. **Timeline** (`TimelineAssembler.assemble`): CODE scene (+ overlay mode when it has a picture/clip), VOICE (spans a whole sentence group), TEXT captions, VISUAL/VIDEO assets, AUDIO SFX. Each asset arrives with an `AssetPlacement` (`PlacementApplier.of`) that becomes the project's own `ItemTransform` / `ItemEffects` / `TransformKeyframe` / `ItemAnimation`, so **position, size, keyframes, glow, blend, grade, corner, chroma key, entrance and exit are all editable afterwards** in the Tune inspector — nothing is locked. Video is always forced to a full-frame backdrop. One undo step on "Add to timeline".
+7. **Flow pictures (Round 14, owner's order):** `DirectorController.prepareFlowPlan()` → `DirectorServices.buildFlowPlan()` →
+   `FlowPromptPlanner` writes ONE prompt per scene from the narration (+ key visual every 3rd scene) → the plan is saved and
+   `FlowBrowserActivity` opens. The owner can log in whenever (no one-time lock); `FlowAutopilot` then arms the capture, fills
+   the prompt, presses Generate, waits for the new picture, downloads it **with the WebView cookies**, verifies it
+   (`FlowImageProbe`: crop loss / focal / glow / sharpness / removable background), waits **8 s (never less)** and repeats.
+   `FlowTransitions` then plans every cut from the real pixels. `applyFlowPlanInternal` writes those transitions into the
+   manifest, turns each picture into a `ResolvedAsset` with a full `AssetPlacement`, re-assembles and applies to the timeline.
+   The browser hands back through `FlowBridgeBus.onPlanReady`; a saved plan is also picked up on the next open.
+8. **Timeline** (`TimelineAssembler.assemble`): CODE scene (+ overlay mode when it has a picture/clip), VOICE (spans a whole sentence group), TEXT captions, VISUAL/VIDEO assets, AUDIO SFX. Each asset arrives with an `AssetPlacement` (`PlacementApplier.of`) that becomes the project's own `ItemTransform` / `ItemEffects` / `TransformKeyframe` / `ItemAnimation`, so **position, size, keyframes, glow, blend, grade, corner, chroma key, entrance and exit are all editable afterwards** in the Tune inspector — nothing is locked. Video is always forced to a full-frame backdrop. One undo step on "Add to timeline".
 
 ## 5. Rendering rules that matter
 - Scene graph = JSON of whitelisted primitives (`SUPPORTED_ELEMENT_TYPES`), stored in `CodeSceneItem.htmlCode`. No generated code is executed.
@@ -86,6 +106,10 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Narration is Android on-device TTS (needs a voice for the language), no cloud TTS/cloning. Quality depends on the device engine.
 - Telegram: bots cannot read old history; library = posts seen by the bot within 24 h of upload (sync workflow every 6 h) + posts already in the app.
 - Vision verification only on multimodal providers; otherwise technical checks only. Licences are "unverified".
+- **Flow is a Google product with a moving DOM.** The driver is defensive (many selectors, Enter/form fallback, and a manual
+  "you press Generate, SAIF still captures" path) but a redesign can need a selector tweak. Google may also refuse WebView
+  sign-in for some accounts: Desktop mode + the in-app account chooser are the documented fallbacks, and the app says so.
+- Termux commands need Termux's `allow-external-apps=true`; without it only the app sandbox shell works (no ffmpeg there).
 - Per-scene edit actions (re-voice / strengthen hook) are blocked for scenes that are part of a multi-scene sentence (they say so).
 - Keyless web search (Bing RSS / DuckDuckGo) can be rate-limited; then research falls back to Wikipedia + News and says so.
 - Legacy HTML/GSAP `CodeSceneItem`s cannot be exported.
@@ -97,6 +121,11 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 | Assets never appear | `lastHuntLog` lines in the chat report ("Telegram library is empty…", "rejected … — reason"), `telegram_catalog/catalog.json`, `TelegramSyncReport`, bot admin/webhook, caption format |
 | Same wrong asset every try | `AssetVerifier.verifyForHunt` verdict, `VisualCheck.betterKeywords`, `AssetHunter.keywordLadder` rungs, `AssetLibrary.search` `strictFormat` |
 | Asset hidden behind graphics | `RenderPlan` z-order, `SCENE_OVERLAY_MARKER`, `AssetPlacement.role` (backdrop vs sticker) |
+| Profile photo / logo became an asset | `FlowMediaRules.isUiChrome` (`googleusercontent.com/a/`, `=s64`, gstatic, header/nav), the per-prompt baseline in `FlowJs.CAPTURE.arm`, and the 320 px + SHA-256 gate in `FlowDownloader.saveBytes` |
+| Flow pictures never download | `FlowDownloader.lastError`, cookies from `FlowWebSession.cookieFor`, blob results via `FlowJs.resolveBlob` → base64 chunks |
+| Browser scroll/zoom dead | must be the Activity (`FlowBrowserActivity`), never a Compose Dialog; `FlowJs.SETUP.fixViewport` + `FlowWebSession.zoom` |
+| Prompts do not match the video | `FlowPromptPlanner` (per-scene narration), `plan.notes` says whether the model polish ran or the local builder was used |
+| Video dies with 429/quota | Settings → 🔁 AUTO-SWITCH ON LIMIT (`BackupProviders`), `LlmGateway.switchProvider()` log line |
 | Asset in the wrong place / wrong size / spins oddly | the `@pl=` tag in `aiWhy`, `AssetPlacements.decodeTag`, `PlacementApplier.transform/keyframes`, `StudioSceneLayers.PlacedImage` |
 | Asset does not move at all | `PlacementApplier.keyframes` (needs ≥2 keys inside the scene), absolute `timeUs` vs local `tMs`, easing name not in `LayerMath`'s list |
 | Orb opens but no voice | provider is not Gemini (see section 6), `SaifAutomation.liveError`, `JarvisConversationService` connection status |
@@ -115,6 +144,53 @@ and a **video studio** (timeline editor: lanes CODE, VIDEO, VISUAL, TEXT, VOICE,
 - Real instrumented tests for export and TTS on a device.
 
 ## 9. Change log (newest first)
+**Round 15.1** — the Round-16 build was rejected by the owner ("bhot bekaar"); this round RESTORES the Round-15
+build exactly and adds only the two fixes that were actually asked for. Whole Round-16 tree reverted to commit
+`4fbfc1f` (layer planner, cut-out, scene anim planner, final QC and the 🚀 button are gone).
+- **Flow opens by itself:** in `agentRun()`, when no Flow plan with pictures exists, the crew now calls
+  `prepareFlowPlan(autoStart = true, autoFinish = true)` instead of telling the owner to tap "🖼 Flow images (auto)".
+- **Arrow button really pressed:** `FlowJs.SUBMIT_V2` scores send controls by label **and geometry** (square-ish
+  button hugging the composer's bottom-right corner), fires pointer/mouse/click, then `GEN_STATE` confirms the page
+  took the prompt; `FlowDriver.submitSmart` → `FlowSubmitResult(clicked, confirmed)` and the autopilot re-sends up
+  to 3× while unconfirmed. No other behaviour of Round 15 changed.
+- `FlowBrowserActivity` gets an `autofinish` extra so the finished plan is applied and the browser closes itself.
+- **Round 15.2** — background removal is back as a local, self-contained fix: `flow/FlowCutout.kt` (flood-fill
+  cut-out → `*_cut.png`), `FlowSlot.cutPath/borderHex`, autopilot step 4b, `FlowPlacement` treats a real cut-out as
+  a transparent overlay (chroma key off), controller feeds the cut-out PNG to the timeline. Nothing else moved.
+**Round 15** — live voice actually works now (RECORD_AUDIO was never requested), plus Power Tools (15 tools) and a
+hardened Flow capture/download path. Report: `docs/ROUND_15_REPORT.md`; build: CI run 41487833948, commit `4fbfc1f`.
+- **Live voice root cause:** `MainActivity` only asked for POST_NOTIFICATIONS, so the mic never opened and the session
+  died silently. Now: RECORD_AUDIO + notifications requested at startup *and* gated again in `SaifLiveModeSheet`
+  (`startWithMic`), with a visible `liveError` card (Retry / settings) and `connectionStatus` line on the orb.
+- **Power Tools (🧰 in the header):** self test (13 checks, exportable), crash log, API-key test, model browser,
+  storage manager, SRT/VTT export, shot-list CSV, cover maker, Flow library dedupe, prompt vault, voice studio,
+  Flow resume, batch picture fixer, provider health, usage analytics.
+- **Flow:** shadow-DOM + CSS-background capture, page-side `fetch` download fallback, auto "open project" nudge,
+  Chrome-open / gallery-import escape hatches.
+**Round 14 (this ZIP)** — the Flow browser is rebuilt around the owner's exact wording: *login jab chaho, scroll/zoom chale,
+profile photo asset na bane, prompts script se banein, 8 s gap pe generate, download + verify (crop/glow/background), phir
+transitions pixels se plan hokar timeline pe lagein.* See `docs/ROUND_14_REPORT.md`.
+- **Real browser:** `flow/web/FlowBrowserActivity` (Activity window, not a dialog) + `FlowWebSession` (persistent cookies,
+  Login any time, real Logout, desktop-UA toggle, A−/A+/1x zoom, scroll buttons, download listener, login detection) +
+  `FlowJs` (forced zoomable viewport, arm/baseline capture that ignores avatars/logos/header art, blob+canvas → base64 chunks).
+  Entry points: studio top-bar 🌐 icon, director "🌐 Flow browser", Settings, and auto-open after prompts are prepared.
+- **Real pipeline:** `flow/` package (`FlowPromptPlanner`, `FlowAutopilot`, `FlowDownloader`, `FlowImageProbe`,
+  `FlowTransitions`, `FlowPlacement`, `FlowLibrary`, `FlowPlanStore`, `FlowBridgeBus`). One prompt per scene from the narration
+  (+ key visual every 3rd scene), 8 s minimum gap, cookie downloads, SHA-256 dedupe, per-picture measurements, pixel-driven
+  transitions, full `AssetPlacement` per picture, manifest transitions, then `applyFlowPlanInternal` + "Add to timeline".
+  `DirectorController.prepareFlowPlan()` / `onFlowPlanReady()` / `attachFlowImages()` (plan-aware, old order-fallback kept).
+- **"One-time setup" wording removed** — the director banner is now a live Flow status card (ready/total) and login is explicitly
+  repeatable; `FlowBatchDialog`/`FlowAiBrowserDialog` only launch the Activity. `FlowAssetStore` delegates to `FlowLibrary`.
+- **API auto-switch:** `llm/BackupProviders` (encrypted) + Settings **🔁 AUTO-SWITCH ON LIMIT**; `LlmGateway.callObserved` now
+  switches provider+key+model on quota/auth/retired-model/too-many-waits; the director chain uses each entry's own provider.
+- **Termux:** `termux/TermuxBridge` (RUN_COMMAND + app-shell fallback + presets) inside the browser's ⋮ menu; manifest gained
+  `com.termux.permission.RUN_COMMAND` + package queries.
+- Tests: `app/src/test/java/com/example/flow/FlowPipelineTest.kt` (rules, plan JSON, transitions, placement, prompt planner).
+- **CI green:** run `41458827378` (commit `ef3d334`) → BUILD SUCCESSFUL + unit tests passed; APK on release tag `saif-ai-apk`
+  (`app-debug.apk`, 2026-11-02 14:21Z). First compile caught 8 errors in the new code (Float/Double mixing in `FlowImageProbe.measure`,
+  a `suspend` call inside `saveCaptured`, `startService` returning `ComponentName?` instead of `Unit`) — all fixed.
+  Nothing else was compiled locally (no JDK/SDK in the sandbox); injected JS was syntax-checked with `node --check`.
+
 **Round 13 (this ZIP)** — multi-agent SAIF crew + Flow-only assets, per the reference video: (A) Flow browser reopen fixed (always-available 🌐 button), (B) Telegram asset fetching REMOVED from the video pipeline (assets = Flow AI images + AI-generated key visuals), (C) supervised multi-agent orchestration, (D) vision analysis of placed images, (E) floating-AI "video banao <topic>" → phone agent runs the crew.
 
 - New `studio/director/AgentOrchestrator.kt`: `AgentRole` (PLANNER/SCRIPT/ASSET/ASSEMBLER/PLACER/WATCHDOG) + `supervised(role, title, fallbackNote) { }` — every step logged to the shared `AgentActivity` bus, auto-retried once by the WATCHDOG, then the declared fallback path. `DirectorController.agentRun` is now the crew: PLANNER (agentDecide + research, fallback = default brief) → SCRIPT (writeScript, fallback = local script) → ASSEMBLER (`produceFromScript`: plan, per-scene AI key visuals, narration, timeline) → PLACER (Flow images onto scenes in order, only if present) → auto `applyToTimeline()`.

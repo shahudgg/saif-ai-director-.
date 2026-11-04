@@ -166,7 +166,19 @@ object DirectorPrompts {
      * Motion-graphics design for a few scenes at a time. Each scene gets its own facts (so the graphics show real numbers and
      * names) and its own suggested layout (shuffled per video), so scenes and videos do not repeat each other.
      */
-    fun sceneBatchV2(b: DirectorBrief, batch: List<Pair<Int, SceneOutline>>, totalScenes: Int, fps: Int, problem: String, factsFor: (SceneOutline) -> List<String>): String = buildString {
+    fun sceneBatchV2(
+        b: DirectorBrief, batch: List<Pair<Int, SceneOutline>>, totalScenes: Int, fps: Int, problem: String,
+        factsFor: (SceneOutline) -> List<String>,
+        slots: Map<Int, com.example.studio.composer.DesignPlan.Slot> = emptyMap()
+    ): String = buildString {
+        // ROUND 16.0 — the topic world is stated to the model so its own scenes follow the same art
+        // direction the local composer uses (space ≠ business ≠ history).
+        runCatching {
+            val dir = com.example.studio.composer.StyleDNA.fromBrief(b).topic
+            appendLine("ART DIRECTION (follow this, it is derived from the topic): world = " + dir.domain.label +
+                "; camera temperament = " + dir.camera + "; visual language = " + dir.imageTreatment + ".")
+            appendLine("Preferred element families for this world: " + dir.archetypes.joinToString(", ") + ". You may use others when the idea needs them.")
+        }
         appendLine("You are an award-winning motion-graphics director. Design ${batch.size} scenes of a $totalScenes-scene explainer video. Reply with ONE complete JSON object only (no prose, no markdown).")
         appendLine("Project: aspect ${b.aspect ?: "9:16"}, fps $fps, style ${b.style ?: "explainer"}, motion level ${b.motionLevel ?: "balanced"}. Topic: ${b.prompt.take(140)}")
         appendLine("""Schema: {"scenes":[{"id":"s1","visualObjective":str,"imagePrompt":str,"caption":str,"transition":"fade|slideLeft|slideUp|zoom|wipe|dissolve|push|whip|flash|iris|zoomBlur|glitch|pageflip|cubeSpin|depthWipe|glitchDissolve","transitionMs":int,"assets":[{"id":str,"kind":"image|video","description":"what a stock clip/picture for this beat must show","fallback":"procedural"}],"cues":[{"kind":"whoosh|pop|riser|hit|ding|tick|glitch","description":str,"atMs":int,"durationMs":int}],"graph":{"bgTop":"#RRGGBB","bgBottom":"#RRGGBB","camera":{"zoomFrom":1,"zoomTo":1.12,"panXFrom":0,"panXTo":0.02,"panYFrom":0,"panYTo":0},"elements":[...]}}]}""")
@@ -187,8 +199,12 @@ object DirectorPrompts {
             appendLine("Colour mood for this video (unique to it): " + d.palettes.joinToString("; ") { "bg ${it.bgTop}->${it.bgBottom}, accents ${it.accent} and ${it.accent2}" } + ".")
         }
         val seed = StyleDNA.fromBrief(b).seed.toString()
+        if (slots.isNotEmpty()) appendLine("EVERY scene in this video already has a RESERVED design slot (family + layout + hero position + exact time window). Use it: it is how the video stays free of repeated scenes, and a scene that ignores its slot is rebuilt locally.")
         batch.forEach { (idx, o) ->
             appendLine("Scene ${o.id} (duration ${o.endMs - o.startMs} ms) narration: ${o.narration}")
+            slots[idx]?.let { slot ->
+                appendLine("  " + com.example.studio.composer.DesignPlan.hint(slot, totalScenes))
+            }
             appendLine("  suggested layout: ${SceneArchetypes.forScene(seed, idx)}")
             factsFor(o).takeIf { it.isNotEmpty() }?.let { f -> appendLine("  facts you may show: " + f.joinToString(" | ")) }
         }

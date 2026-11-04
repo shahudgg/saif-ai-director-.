@@ -97,8 +97,14 @@ object DirectorQuestions {
             customHint = "Exact length, e.g. 2:30 or 4 min 20 sec")
     }
 
-    private val languageCard = QuestionCard("language", "Which language for narration?",
-        listOf("English", "Hindi", "Hinglish", "Spanish"), optional = false, customHint = "Any language your voice provider supports")
+    private val languageCard = QuestionCard("language", "Narration (voice) kis language mein ho?",
+        listOf("English", "Hindi", "Hinglish", "Spanish"), optional = false,
+        customHint = "Koi bhi language jo tumhara voice provider support karta ho")
+
+    /** ROUND 15.3 — subtitles ka apna language, narration se alag ho sakta hai. */
+    private val captionLanguageCard = QuestionCard("captionLanguage", "Captions / subtitles kis language mein hon?",
+        listOf("Same as narration", "English", "Hindi", "Hinglish"), optional = false,
+        customHint = "Ya exact language likho")
 
     /** The next unanswered, materially useful question, or null when the brief is ready. */
     fun next(brief: DirectorBrief): QuestionCard? {
@@ -123,13 +129,15 @@ object DirectorQuestions {
             queue += QuestionCard("narrationMode", "How should narration combine with the original audio?",
                 listOf("Replace original speech", "Add narration, keep original audio", "Mix dialogue + narration", "Narrate only silent parts"), optional = false)
         }
-        queue += QuestionCard("aspect", "Aspect ratio?", listOf("9:16", "16:9", "1:1", "4:5"))
-        queue += QuestionCard("style", "Editing style?",
+        queue += QuestionCard("aspect", "Video ka aspect ratio? (Flow bhi isi par set hoga)",
+            listOf("9:16", "16:9", "1:1", "4:5"))
+        queue += QuestionCard("style", "Video ka style kaunsa ho?",
             listOf("Educational explainer", "Documentary", "Cinematic", "Motivational"))
         queue += QuestionCard("audience", "Who is the audience?",
             listOf("General public", "Students", "Professionals", "Kids / beginners"))
         queue += QuestionCard("subtitles", "Subtitles?",
             listOf("Yes - word highlight", "Yes - simple lines", "No subtitles", "Only key phrases"))
+        if (brief.subtitles?.startsWith("No") != true) queue += captionLanguageCard
         if (wf != DirectorWorkflow.VIDEO_TO_EDITING) {
             queue += QuestionCard("motionLevel", "Motion graphics level?",
                 listOf("Minimal", "Balanced", "Heavy", "Footage-first with accents"))
@@ -160,6 +168,7 @@ object DirectorQuestions {
         "style" -> b.style != null
         "audience" -> b.audience != null
         "subtitles" -> b.subtitles != null
+        "captionLanguage" -> b.answers.containsKey("captionLanguage") || b.skipped.contains("captionLanguage")
         else -> false
     }
 
@@ -177,6 +186,8 @@ object DirectorQuestions {
             "style" -> withAnswer.copy(style = a)
             "audience" -> withAnswer.copy(audience = a)
             "subtitles" -> withAnswer.copy(subtitles = a)
+            "captionLanguage" -> withAnswer.copy(
+                subtitleLanguage = if (a.equals("Same as narration", true)) brief.narrationLanguage ?: a else a)
             "motionLevel" -> withAnswer.copy(motionLevel = a)
             "voiceStyle" -> withAnswer.copy(voiceStyle = a,
                 pace = when { a.contains("energetic", true) -> "fast"; a.contains("calm", true) -> "slow"; else -> brief.pace })
