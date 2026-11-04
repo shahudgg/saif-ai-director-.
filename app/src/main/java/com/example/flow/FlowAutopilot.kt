@@ -129,13 +129,35 @@ class FlowAutopilot(
             state(FlowPhase.FAILED, 0, 0, "No prompts in the plan.")
             return current
         }
-        // ---- 0. ROUND 15.4: a run with nothing finished yet ALWAYS starts in a brand-new Flow project ----
-        // The owner hit exactly this: a picture was generated but the app picked up an old project's picture.
-        // Working inside a fresh project removes those pictures from the page entirely, and the capture
-        // layer additionally refuses anything that was not armed for the running prompt.
-        if (current.slots.none { it.done }) {
+        // ---- 0. ROUND 15.5: ALWAYS work inside a brand-new Flow project ----
+        // The owner's report was exact: a picture was generated, but the app downloaded a picture that
+        // already existed in an older Flow project. Two guarantees are applied here:
+        //   1. when this plan has no project of its own (or Flow is showing a different project) a FRESH
+        //      project is created BEFORE anything is typed;
+        //   2. once that happens every slot is reset to PENDING, so a picture that belongs to an older
+        //      project can never be "resumed" into this video.
+        val hereUrl = runCatching { driver.info().url }.getOrNull().orEmpty().substringBefore("?").substringBefore("#")
+        val sameProject = current.flowProjectUrl.isNotBlank() && hereUrl.isNotBlank() &&
+            hereUrl.startsWith(current.flowProjectUrl) && current.slots.any { it.done }
+        if (!sameProject) {
             state(FlowPhase.GENERATING, 0, total, "Naya Flow project ban raha hai — purane project ki images use nahi hongi…")
             val made = runCatching { driver.newProject() }.getOrDefault(false)
+            if (made) {
+                val fresh = current.slots.map { s ->
+                    if (s.imagePath.isBlank() && s.cutPath.isBlank() && s.status == FlowSlotStatus.PENDING) s
+                    else s.copy(
+                        status = FlowSlotStatus.PENDING, imagePath = "", imageUrl = "", imageHash = "",
+                        review = null, cutPath = "", borderHex = "", layout = "", error = ""
+                    )
+                }
+                current = current.copy(slots = fresh)
+                onPlan(current)
+            }
+            val newUrl = runCatching { driver.info().url }.getOrNull().orEmpty().substringBefore("?").substringBefore("#")
+            if (newUrl.isNotBlank()) {
+                current = current.copy(flowProjectUrl = newUrl)
+                onPlan(current)
+            }
             state(FlowPhase.GENERATING, 0, total,
                 if (made) "Naya project ready ✓ — is project ke andar hi ek-ek image banegi."
                 else "Naya project confirm nahi hua — phir bhi sirf armed prompt ke baad aayi image lega.")
@@ -269,6 +291,23 @@ class FlowAutopilot(
                 status = status, imagePath = record.path, imageUrl = record.url,
                 imageHash = record.hash, review = review, cutPath = cutPath, borderHex = borderHex
             )
+            // ROUND 15.5 — an identical picture means Flow handed back something that already existed
+            // (classic old-project result). It is refused instead of being pasted into the video.
+            val dup = if (record.hash.isBlank()) null else current.slots.firstOrNull { other ->
+                other.index != running.index && other.imageHash.isNotBlank() && other.imageHash == record.hash
+            }
+            if (dup != null) {
+                current = current.withSlot(measured.copy(
+                    status = FlowSlotStatus.FAILED, imagePath = "", imageHash = "",
+                    review = null, layout = "",
+                    error = "Duplicate picture (already picture #" + (dup.index + 1) + ") — purane result jaisa hai, use nahi kiya."
+                ))
+                onPlan(current)
+                done++
+                state(FlowPhase.GENERATING, done, total,
+                    "Duplicate image aayi — skip ki, agla prompt chal raha hai.", true, record.path)
+                continue
+            }
             val planned = FlowLayoutPlanner.plan(measured, running.sceneMs, current.aspect)
             current = current.withSlot(measured.copy(
                 layout = planned.toJson(),

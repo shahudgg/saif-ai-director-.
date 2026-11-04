@@ -67,6 +67,11 @@ data class FlowPlan(
     val id: String = UUID.randomUUID().toString(),
     val projectId: String = "",
     val topic: String = "",
+    /**
+     * ROUND 15.5 — the Flow project URL this plan was generated in. Empty means "no project yet", so the
+     * next run must create a fresh one. This is what stops pictures from an older project being reused.
+     */
+    val flowProjectUrl: String = "",
     val aspect: String = "9:16",
     val style: String = "cinematic explainer",
     val createdAt: Long = System.currentTimeMillis(),
@@ -223,6 +228,7 @@ object FlowJson {
     fun planToJson(p: FlowPlan): JSONObject = JSONObject().apply {
         put("id", p.id); put("projectId", p.projectId); put("topic", p.topic)
         put("aspect", p.aspect); put("style", p.style); put("createdAt", p.createdAt)
+        put("flowProjectUrl", p.flowProjectUrl)
         put("slots", JSONArray().apply { p.slots.forEach { put(slotToJson(it)) } })
         put("notes", JSONArray().apply { p.notes.forEach { put(it) } })
         put("transitions", JSONArray().apply { p.transitions.forEach { put(transitionToJson(it)) } })
@@ -237,6 +243,7 @@ object FlowJson {
             id = o.optString("id", UUID.randomUUID().toString()),
             projectId = o.optString("projectId"),
             topic = o.optString("topic"),
+            flowProjectUrl = o.optString("flowProjectUrl"),
             aspect = o.optString("aspect", "9:16"),
             style = o.optString("style"),
             createdAt = o.optLong("createdAt", System.currentTimeMillis()),

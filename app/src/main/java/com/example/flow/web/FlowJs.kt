@@ -896,6 +896,37 @@ object FlowJs {
 })(%s);
 """
 
+    /** ROUND 15.5 -- find the on-screen control whose label matches a pattern and report where it is (Kotlin taps it for real). */
+    val FIND_TEXT = """
+(function(pat){
+  var rx;
+  try { rx = new RegExp(pat, 'i'); } catch(e) { return { ok: false, reason: 'bad-pattern' }; }
+  var els = document.querySelectorAll('button,[role="button"],[role="radio"],[role="option"],[role="menuitem"],[role="menuitemradio"],[role="tab"],li,label,[data-value]');
+  var best = null, bestScore = -1;
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!el || el.disabled) continue;
+    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') continue;
+    var r = el.getBoundingClientRect();
+    if (!r || r.width < 14 || r.height < 10 || r.width > 420 || r.height > 260) continue;
+    if (r.bottom < 4 || r.top > ((window.innerHeight || 4000) - 4)) continue;
+    var t = ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+             (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-value') || ''))
+             .replace(/\s+/g, ' ').trim();
+    if (!t || t.length > 60) continue;
+    if (!rx.test(t)) continue;
+    var score = 100 - Math.min(45, t.length);
+    if (el.closest && el.closest('[role="menu"],[role="dialog"],[role="listbox"],[role="menu-item"]')) score += 30;
+    if (score > bestScore) {
+      bestScore = score;
+      best = { x: r.left + r.width / 2, y: r.top + r.height / 2, label: t.slice(0, 26) };
+    }
+  }
+  if (!best) return { ok: false };
+  return { ok: true, x: best.x, y: best.y, label: best.label };
+})(%s);
+"""
+
     val CLEAR_STORAGE = """
 (function(){
   try { window.localStorage.clear(); } catch(e) {}

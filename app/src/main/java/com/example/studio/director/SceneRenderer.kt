@@ -104,10 +104,14 @@ object SceneRenderer {
     private fun drawElement(canvas: Canvas, w: Float, h: Float, e: Element, tMs: Long, sceneOpacity: Float, camera: SpatialPose) {
         val alpha = resolve(e, "alpha", if (e.anims.any { it.prop == "alpha" }) 0f else 1f, tMs).coerceIn(0f, 1f) * sceneOpacity
         if (alpha <= 0.002f) return
-        val x = resolve(e, "x", e.x, tMs) * w
-        val y = resolve(e, "y", e.y, tMs) * h
-        val ew = resolve(e, "w", e.w, tMs) * w
-        val eh = resolve(e, "h", e.h, tMs) * h
+        // ROUND 15.5 — the RESTING pose is pulled inside the safe area, so nothing important can sit under
+        // the notch, the gesture bar or beyond the screen edge. Animations are untouched: a deliberate
+        // slide-in from outside the frame still plays, and full-bleed backgrounds are never clamped.
+        val box = SceneSafeArea.restingBox(e)
+        val x = resolve(e, "x", box.x, tMs) * w
+        val y = resolve(e, "y", box.y, tMs) * h
+        val ew = resolve(e, "w", box.w, tMs) * w
+        val eh = resolve(e, "h", box.h, tMs) * h
         val scale = resolve(e, "scale", 1f, tMs)
         val rot = resolve(e, "rotation", 0f, tMs)
         val progress = resolve(e, "progress", 1f, tMs).coerceIn(0f, 1f)

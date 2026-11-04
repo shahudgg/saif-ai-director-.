@@ -530,6 +530,23 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         }.getOrDefault(false)
     }
 
+    /**
+     * ROUND 15.5 — find the control whose label matches [pattern] and TAP it with a real MotionEvent.
+     * Flow's React UI ignores synthetic clicks (that is why the arrow never pressed), so settings
+     * controls get exactly the same real-touch treatment as the arrow. Returns the matched label or null.
+     */
+    private suspend fun tapMatching(pattern: String): String? {
+        val raw = runCatching { eval(FlowJs.FIND_TEXT.replace("%s", JSONObject.quote(pattern))) }.getOrNull() ?: return null
+        val o = runCatching { JSONObject(unquoteJson(raw)) }.getOrNull() ?: return null
+        if (!o.optBoolean("ok")) return null
+        val x = o.optDouble("x", 0.0)
+        val y = o.optDouble("y", 0.0)
+        if (x <= 1.0 || y <= 1.0) return null
+        if (!tapAt(x, y)) return null
+        delay(500L)
+        return o.optString("label").ifBlank { "tap" }
+    }
+
     private suspend fun waitConfirm(before: GenState?, windowMs: Long): Boolean {
         var waited = 0L
         while (waited < windowMs) {
@@ -555,7 +572,15 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         delay(900L)
         val raw = runCatching { eval(FlowJs.SET_ASPECT.replace("%s", JSONObject.quote(aspect))) }.getOrNull()
         val res = raw?.let { unquoteJson(it) }.orEmpty()
-        val ok = res.startsWith("ok") || res.startsWith("already")
+        var ok = res.startsWith("ok") || res.startsWith("already")
+        if (!ok) {
+            // ROUND 15.5 — synthetic clicks are ignored by Flow's UI: tap the ratio itself, for real.
+            val ratio = aspect.replace(":", "\\s*:\\s*").replace("/", "\\s*/\\s*")
+            val label = runCatching { tapMatching("^\\s*" + ratio + "\\s*$") }.getOrNull()
+                ?: runCatching { tapMatching(ratio) }.getOrNull()
+            ok = label != null
+            if (label != null) delay(400L)
+        }
         if (!ok) runCatching { eval(FlowJs.CLOSE_MENUS) }
         delay(300L)
         val aspectNote = when {
@@ -580,8 +605,10 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         val cx = parts.getOrNull(1)?.toDoubleOrNull() ?: 0.0
         val cy = parts.getOrNull(2)?.toDoubleOrNull() ?: 0.0
         delay(800L)
+        // ROUND 15.5 — "1 image at a time" is picked with a REAL tap (Flow ignores synthetic clicks).
+        val tappedOne = runCatching { tapMatching("^(x?1|1\\s?(image|photo|picture|result)s?|one image|only one)$") }.getOrNull()
         val pickJs = FlowJs.PICK_ONE_IMAGE.replace("%1", cx.toString()).replace("%2", cy.toString())
-        val picked = runCatching { eval(pickJs) }.getOrNull().let { it != null && it.contains("ok:") }
+        val picked = tappedOne != null || runCatching { eval(pickJs) }.getOrNull().let { it != null && it.contains("ok:") }
         delay(600L)
         runCatching { eval(FlowJs.CLOSE_MENUS) }
         delay(300L)
