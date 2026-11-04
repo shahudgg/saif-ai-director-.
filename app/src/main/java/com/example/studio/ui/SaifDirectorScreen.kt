@@ -89,6 +89,8 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
     var showAgent by remember { mutableStateOf(false) }
     var showFlowSetup by remember { mutableStateOf(false) }
     var showBatch by remember { mutableStateOf(false) }
+    /** ROUND 15.8 — secondary tools are collapsed by default so the screen has ONE clear action. */
+    var showMore by remember { mutableStateOf(false) }
     var checkingMusic by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scrollScope = androidx.compose.runtime.rememberCoroutineScope()
@@ -134,6 +136,18 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
                 IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Research, asset sources & Flow AI", tint = Color(0xFFCCC3D9)) }
             }
         }
+
+        // ROUND 15.8 — one glance tells the owner where the video actually is. Every dot is real state,
+        // never an optimistic guess: prompt → script → scenes → images → timeline.
+        StageStrip(
+            hasTopic = ui.brief.prompt.isNotBlank(),
+            hasScript = ui.script.isNotBlank(),
+            scenes = ui.manifest?.scenes?.size ?: 0,
+            imagesDone = ui.flowPlan?.finishedCount ?: 0,
+            imagesTotal = ui.flowPlan?.slots?.size ?: 0,
+            timelineReady = ui.readyToApply || ui.applied,
+            working = ui.working
+        )
 
         // Round 14 — Flow status card. Login is NEVER a one-time lock: the browser opens any time and the
         // session stays signed in until the owner logs out.
@@ -202,8 +216,32 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
             }
         }
 
-        // Action bar — only real, state-driven actions
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // ROUND 15.8 — CLEAN ACTION AREA: exactly one primary step is on screen; the rest live behind
+        // "More tools", so the owner never has to hunt through twelve equal-looking buttons.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val primaryMod = Modifier.weight(1f)
+            val purple = ButtonDefaults.buttonColors(containerColor = Purple)
+            // Exactly one primary step at a time — driven purely by the controller's real state.
+            when {
+                ui.working -> Spacer(Modifier.weight(1f))
+                ui.awaitingBriefConfirm -> Button(enabled = !checkingMusic, onClick = controller::confirmAndStart,
+                    modifier = primaryMod, colors = purple) { Text("Brief confirm karo → video banao", fontWeight = FontWeight.Bold) }
+                ui.script.isNotBlank() && !ui.scriptApproved && ui.manifest == null -> Button(enabled = !checkingMusic,
+                    onClick = controller::approveScript, modifier = primaryMod, colors = purple) { Text("Script approve karo", fontWeight = FontWeight.Bold) }
+                ui.readyToApply || ui.applied -> Button(enabled = !checkingMusic, onClick = { controller.applyToTimeline() },
+                    modifier = primaryMod, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))) { Text("Timeline pe lagao", fontWeight = FontWeight.Bold) }
+                ui.status?.failed == true -> Button(enabled = !checkingMusic, onClick = controller::retry,
+                    modifier = primaryMod, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B))) { Text("Retry", fontWeight = FontWeight.Bold) }
+                ui.manifest != null -> Button(enabled = !checkingMusic, onClick = { controller.prepareFlowPlan(true) },
+                    modifier = primaryMod, colors = purple) { Text("Images banao (scene-wise)", fontWeight = FontWeight.Bold) }
+                wf == DirectorWorkflow.ZERO_TO_VIDEO -> Button(enabled = !checkingMusic, onClick = { showAgent = true },
+                    modifier = primaryMod, colors = purple) { Text("🤖 SAIF Agent chalao", fontWeight = FontWeight.Bold) }
+                else -> Spacer(Modifier.weight(1f))
+            }
+            OutlinedButton(onClick = { showMore = !showMore }) { Text(if (showMore) "Band karo" else "Tools", fontSize = 12.sp) }
+        }
+        if (showMore) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if ((wf.needsSourceVideo || wf.needsSourceAudio) && !ui.working)
                 OutlinedButton(onClick = { pick() }) { Icon(Icons.Default.AttachFile, null); Text(if (ui.sourceName == null) "Attach ${if (wf.needsSourceAudio) "audio" else "video"}" else "Change file") }
             if (wf == DirectorWorkflow.ZERO_TO_VIDEO && !ui.working && ui.manifest == null) OutlinedButton(onClick = { showAgent = true }) { Text("🤖 SAIF Agent") }
@@ -233,11 +271,18 @@ fun SaifDirectorScreen(controller: DirectorController, onClose: () -> Unit, auto
             if (!ui.working) TextButton(enabled = !checkingMusic, onClick = controller::resetConversation) { Text("New chat", color = Color(0xFF9E95AC)) }
         }
 
-        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        // ROUND 15.8 — COMPOSER: one calm card, real hints, and starter ideas when the chat is empty.
+        if (ui.turns.isEmpty() && wf == DirectorWorkflow.ZERO_TO_VIDEO && input.isBlank()) {
+            IdeaChips(onPick = { input = it })
+        }
+        Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), shape = RoundedCornerShape(18.dp),
+            color = Glass, border = BorderStroke(1.dp, Color(0x33FFFFFF))) {
+        Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.Bottom) {
             OutlinedTextField(value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f), enabled = !ui.working && !checkingMusic,
                 placeholder = { Text(if (ui.script.isNotBlank() && !ui.scriptApproved) "Describe script changes…" else if (ui.readyToApply || ui.applied) "e.g. “Scene 2: make it a bar chart”" else "Message the AI Director…", fontSize = 13.sp) },
                 maxLines = 5, shape = RoundedCornerShape(16.dp))
             IconButton(onClick = { if (input.isNotBlank()) { controller.send(input); input = "" } }, enabled = !ui.working && !checkingMusic) { Icon(Icons.AutoMirrored.Filled.Send, "Send", tint = Cyan) }
+        }
         }
     }
     if (showSettings) KeysDialog(onDismiss = { showSettings = false })
@@ -576,4 +621,81 @@ private fun SceneThumb(s: com.example.studio.director.Scene, aspect: String) {
         b.asImageBitmap()
     }
     androidx.compose.foundation.Image(bitmap = bmp, contentDescription = "Scene preview", modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)))
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// ROUND 15.8 — small, honest UI pieces used by the zero-to-video screen.
+// ---------------------------------------------------------------------------------------------
+
+/** Five real stages of a video. A dot is filled only when that stage truly exists. */
+@Composable
+private fun StageStrip(
+    hasTopic: Boolean, hasScript: Boolean, scenes: Int,
+    imagesDone: Int, imagesTotal: Int, timelineReady: Boolean, working: Boolean
+) {
+    val steps = listOf(
+        "Topic" to hasTopic,
+        "Script" to hasScript,
+        "Scenes" to (scenes > 0),
+        "Images" to (imagesDone > 0),
+        "Timeline" to timelineReady
+    )
+    val current = steps.indexOfFirst { !it.second }.let { if (it < 0) steps.lastIndex else it }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        steps.forEachIndexed { i, (label, done) ->
+            val active = i == current && !done
+            val bg = when {
+                done -> Color(0xFF10B981).copy(alpha = 0.18f)
+                active -> Purple.copy(alpha = 0.30f)
+                else -> Color(0xFF1B1626)
+            }
+            val fg = when {
+                done -> Color(0xFF6EE7B7)
+                active -> Color(0xFFD9C6FF)
+                else -> Color(0xFF6F6780)
+            }
+            Surface(shape = RoundedCornerShape(9.dp), color = bg, modifier = Modifier.weight(1f)) {
+                Column(Modifier.padding(vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(if (done) "✓" else "${i + 1}", color = fg, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text(label, color = fg, fontSize = 9.sp, maxLines = 1)
+                }
+            }
+        }
+    }
+    if (imagesTotal > 0) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            LinearProgressIndicator(progress = { (imagesDone.toFloat() / imagesTotal).coerceIn(0f, 1f) },
+                modifier = Modifier.weight(1f).heightIn(min = 4.dp), color = Cyan)
+            Spacer(Modifier.width(8.dp))
+            Text("$imagesDone/$imagesTotal images", color = Color(0xFF9E95AC), fontSize = 10.sp)
+        }
+    }
+    if (working) Spacer(Modifier.width(1.dp))
+}
+
+/** Starter ideas for the empty chat — tapping only fills the box, nothing runs behind the owner's back. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun IdeaChips(onPick: (String) -> Unit) {
+    val ideas = listOf(
+        "Space: black hole kaise banta hai",
+        "Tech: UPI kaise kaam karta hai",
+        "History: Mughal empire in 60s",
+        "Nature: coral reef ka khatra",
+        "Business: ek brand 30 din mein kaise ugta hai"
+    )
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp)) {
+        Text("YA IN MEIN SE CHUNO", color = Color(0xFF6F6780), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(2.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ideas.forEach { idea ->
+                Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF17131F),
+                    border = BorderStroke(1.dp, Color(0x228B5CF6)), modifier = Modifier.clickable { onPick(idea) }) {
+                    Text(idea, color = Color(0xFFBDB3CC), fontSize = 10.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp))
+                }
+            }
+        }
+    }
 }
