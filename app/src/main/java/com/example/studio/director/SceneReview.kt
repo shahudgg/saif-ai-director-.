@@ -33,6 +33,9 @@ object SceneReview {
     fun review(manifest: SceneManifest, aspect: String): Result {
         val (aw, ah) = LayoutEngine.parseAspect(aspect)
         val statuses = ArrayList<SceneStatus>()
+        // ROUND 15.9 — pixel proof: the scene is actually rendered (3 frames) and measured, so a scene
+        // that "looks fine" in JSON but draws nothing is caught before the owner ever sees it.
+        val probeLimit = 40
         var clean = 0
         var fixed = 0
         var leftover = 0
@@ -59,11 +62,27 @@ object SceneReview {
                 else e
             }
             val repaired = LayoutEngine.repair(g.copy(elements = elements), aw, ah, sc.durationMs).graph
+            // ROUND 15.9 — pixel proof of the REPAIRED scene. These findings cannot be fixed by editing
+            // the JSON, so they are reported as-is and never counted as an automatic fix.
+            val probeNotes = ArrayList<String>()
+            if (manifest.scenes.size <= probeLimit) {
+                val reading = FrameProbe.probe(sc.copy(graph = repaired))
+                if (reading != null) {
+                    if (reading.blank) probeNotes += "render blank nikli (ink ${(reading.ink * 100).toInt()}%)"
+                    if (reading.spillsIntoCaption) probeNotes += "content caption band mein (${(reading.bottomInk * 100).toInt()}%)"
+                }
+            }
             val after = ArrayList<String>()
             after += LayoutEngine.issues(repaired, aw, ah, sc.durationMs)
             after += SceneLint.problems(repaired, aw, ah)
-            val wasFixed = before.isNotEmpty() && after.size < before.size
-            if (before.isEmpty()) clean++ else if (wasFixed) fixed++ else leftover++
+            after += probeNotes
+            val wasFixed = probeNotes.isEmpty() && before.isNotEmpty() && after.size < before.size
+            when {
+                probeNotes.isNotEmpty() -> leftover++
+                before.isEmpty() && after.isEmpty() -> clean++
+                wasFixed -> fixed++
+                else -> leftover++
+            }
 
             statuses += SceneStatus(sc.id, after.distinct(), wasFixed)
             sc.copy(graph = repaired)
