@@ -927,6 +927,71 @@ object FlowJs {
 })(%s);
 """
 
+    /** ROUND 15.7 -- force the images-per-run control to 1 (slider, minus button or numeric field). */
+    val FORCE_ONE_IMAGE = """
+(function(){
+  var S = window.__saifFlow || {};
+  var c = S.composer ? S.composer() : null;
+  var cr = c ? c.getBoundingClientRect() : null;
+  var log = [];
+
+  // 1. A slider inside the open popover: drive it to its minimum (1 image).
+  var ranges = document.querySelectorAll('input[type="range"]');
+  for (var i = 0; i < ranges.length; i++) {
+    var r = ranges[i];
+    try {
+      var min = Number(r.min || 1);
+      r.value = String(isFinite(min) ? min : 1);
+      r.dispatchEvent(new Event('input', { bubbles: true }));
+      r.dispatchEvent(new Event('change', { bubbles: true }));
+      log.push('range');
+    } catch(e) {}
+  }
+
+  // 2. Minus / decrease controls: press until the counter reads 1 (or a handful of tries).
+  function countNow(){
+    var txt = (document.body && document.body.innerText) ? document.body.innerText : '';
+    var m = /(\d+)\s*(image|images|output|outputs|result|results)/i.exec(txt);
+    return m ? Number(m[1]) : -1;
+  }
+  var minus = document.querySelectorAll('button,[role="button"]');
+  for (var k = 0; k < minus.length; k++) {
+    var b = minus[k];
+    if (!b || b.disabled) continue;
+    var br = b.getBoundingClientRect();
+    if (!br || br.width < 10 || br.width > 90 || br.height < 10 || br.height > 90) continue;
+    if (cr && Math.abs(br.top - cr.top) > 320) continue;
+    var t = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '') + ' ' + (b.title || '')).toLowerCase();
+    if (!/(decrease|minus|remove|less|kam|−|-)/.test(t)) continue;
+    if (/(delete|close|remove image|cancel)/.test(t)) continue;
+    for (var n = 0; n < 4; n++) {
+      try { b.click(); } catch(e) {}
+      log.push('minus');
+      if (countNow() === 1) break;
+    }
+    if (countNow() === 1) break;
+  }
+
+  // 3. A numeric control next to the composer: type 1 into it.
+  var nums = document.querySelectorAll('input[type="number"],input[type="text"][inputmode="numeric"]');
+  for (var q = 0; q < nums.length; q++) {
+    var inp = nums[q];
+    var ir = inp.getBoundingClientRect();
+    if (!ir || ir.width < 12) continue;
+    if (cr && (ir.top > cr.bottom + 260 || ir.bottom < cr.top - 260)) continue;
+    try {
+      var proto = window.HTMLInputElement.prototype;
+      var d = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (d && d.set) d.set.call(inp, '1'); else inp.value = '1';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      log.push('numeric');
+    } catch(e) {}
+  }
+  return log.length ? 'ok:' + log.join('+') : 'notfound';
+})();
+"""
+
     val CLEAR_STORAGE = """
 (function(){
   try { window.localStorage.clear(); } catch(e) {}

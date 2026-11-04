@@ -96,8 +96,13 @@ object SceneVarietyComposer {
             1 -> CameraMove(1.04f, 1.0f, panXTo = .04f, orbitTo = 8f)
             else -> CameraMove(1f, 1.12f, panXTo = -.04f, tiltTo = -6f)
         }
-        val g = SceneGraph(palette.bgTop, palette.bgBottom, camera, listOf(atmosphere, main, title, detail))
+        val base = SceneGraph(palette.bgTop, palette.bgBottom, camera, listOf(atmosphere, main, title, detail))
         val (aw, ah) = LayoutEngine.parseAspect(aspect)
-        return LayoutEngine.repair(g, aw, ah, dur).graph
+        // ROUND 15.7 — the composition grammar decides the STRUCTURE of this beat (layout family +
+        // the illustration that really shows its data + the animated boundary card that owns it), so two
+        // different topics never come out looking like the same template.
+        val grammarVariant = SceneGrammar.variantFor(beat, dna) + v
+        val decorated = SceneGrammar.decorate(beat, base, palette, accent, dur, grammarVariant)
+        return LayoutEngine.repair(decorated, aw, ah, dur).graph
     }
 }

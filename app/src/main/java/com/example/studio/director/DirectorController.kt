@@ -877,11 +877,16 @@ class DirectorController(
                 return@guarded
             }
             assets = assets.filterNot { it.source.startsWith("ai-image:") } + gen
+            val (boundedManifest0, boundedAssets) = OverlayBoundary.apply(m, assets, b.aspect ?: "9:16")
+            assets = boundedAssets
+            val review = SceneReview.review(boundedManifest0, b.aspect ?: "9:16")
+            val boundedManifest = review.manifest
+            if (review.lines.isNotEmpty()) say("🔍 Scene review: " + review.lines.joinToString(" · "))
             store.saveArtifacts(projectId, workflow, narrationClips, assets)
             status(DirectorStage.BUILDING_TIMELINE, "Timeline ban raha hai")
-            val (assembled, probs) = TimelineAssembler.assemble(getProject(), m, narrationClips, assets,
+            val (assembled, probs) = TimelineAssembler.assemble(getProject(), boundedManifest, narrationClips, assets,
                 captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
-                sfx = SfxFiles.render(appContext, m, library = { kind -> sfxLibrary(kind) }),
+                sfx = SfxFiles.render(appContext, boundedManifest, library = { kind -> sfxLibrary(kind) }),
                 captionStyle = BrandKit.captionStyle(appContext))
             val (p, musicNotes) = attachCheckedMusic(assembled, m, b)
             gate()
@@ -974,18 +979,25 @@ class DirectorController(
             }
             // KEYFRAME/STICKER slots become floating cut-outs on the same scene; backgrounds replace old Flow assets.
             assets = assets.filterNot { it.requestId.startsWith("flow-") } + add
+            // ROUND 15.7 — every floating layer of a scene is laid inside ONE animated boundary card, so
+            // 3-4 overlays per scene sit on a designed grid instead of on top of each other.
+            val (boundedManifest0, boundedAssets) = OverlayBoundary.apply(newManifest, assets, plan.aspect)
+            assets = boundedAssets
+            val review = SceneReview.review(boundedManifest0, plan.aspect)
+            val boundedManifest = review.manifest
+            if (review.lines.isNotEmpty()) say("🔍 Scene review: " + review.lines.joinToString(" · "))
             store.saveArtifacts(projectId, workflow, narrationClips, assets)
             val b = _ui.value.brief
-            val (assembled, probs) = TimelineAssembler.assemble(getProject(), newManifest, narrationClips, assets,
+            val (assembled, probs) = TimelineAssembler.assemble(getProject(), boundedManifest, narrationClips, assets,
                 captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
-                sfx = SfxFiles.render(appContext, newManifest, library = { kind -> sfxLibrary(kind) }),
+                sfx = SfxFiles.render(appContext, boundedManifest, library = { kind -> sfxLibrary(kind) }),
                 captionStyle = BrandKit.captionStyle(appContext))
-            val (p, musicNotes) = if (workflow == DirectorWorkflow.ZERO_TO_VIDEO) attachCheckedMusic(assembled, newManifest, b) else assembled to emptyList()
+            val (p, musicNotes) = if (workflow == DirectorWorkflow.ZERO_TO_VIDEO) attachCheckedMusic(assembled, boundedManifest, b) else assembled to emptyList()
             gate()
             pendingProject = p
-            update { copy(manifest = newManifest, problems = probs + musicNotes, working = false, readyToApply = true,
+            update { copy(manifest = boundedManifest, problems = probs + musicNotes, working = false, readyToApply = true,
                 status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "${usable.size} Flow pictures ready")) }
-            say(flowReport(plan, usable.size, newManifest.scenes.size))
+            say(flowReport(plan, usable.size, boundedManifest.scenes.size))
             if (applyNow) applyToTimeline()
         }
     }

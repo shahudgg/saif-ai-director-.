@@ -72,6 +72,15 @@ interface FlowDriver {
      */
     suspend fun newProject(): Boolean = false
 
+    /**
+     * ROUND 15.7 — is OUR prompt still sitting in Flow's composer?
+     *
+     * This is the honest test of "the arrow did not press": if the text is gone, Flow accepted the prompt
+     * even when its UI gives us no confirmation, and re-tapping would generate a SECOND picture. That is
+     * exactly why the app kept making more images than the plan asked for.
+     */
+    suspend fun promptStillInComposer(): Boolean = false
+
     /** ROUND 15.3 — pick Flow's own aspect-ratio control before generating. */
     suspend fun setAspect(aspect: String): Boolean = false
 
@@ -219,9 +228,17 @@ class FlowAutopilot(
             while (!send.confirmed && attempt < MAX_SUBMIT_TRIES) {
                 currentCoroutineContext().ensureActive()
                 if (stopped) { state(FlowPhase.STOPPED, done, total, "Stopped by you."); return current }
+                // ROUND 15.7 — NEVER re-tap blindly. If Flow's composer no longer holds our prompt, the
+                // prompt WAS taken and another tap would generate a second, unplanned picture.
+                val stillThere = runCatching { driver.promptStillInComposer() }.getOrDefault(false)
+                if (!stillThere) {
+                    state(FlowPhase.GENERATING, done, total,
+                        "Arrow ne prompt le liya (composer khali) — dobara tap nahi kar raha, picture ka wait.")
+                    break
+                }
                 attempt++
                 state(FlowPhase.GENERATING, done, total,
-                    "Arrow confirm nahi hua — dobara tap kar raha hoon (" + (attempt - 1) + "/" + (MAX_SUBMIT_TRIES - 1) + ")")
+                    "Prompt abhi bhi composer mein hai — dobara tap kar raha hoon (" + (attempt - 1) + "/" + (MAX_SUBMIT_TRIES - 1) + ")")
                 delay(1500L)
                 // Re-arm so the retry cannot pick up the previous attempt's frame. The prompt is NOT re-typed.
                 runCatching { driver.arm(slot.index) }

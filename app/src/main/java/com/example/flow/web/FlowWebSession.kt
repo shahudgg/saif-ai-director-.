@@ -423,8 +423,23 @@ class FlowWebSession(private val context: Context) : FlowDriver {
             _log.value = (_log.value + "\nPrompt box nahi mila — Flow page ready nahi hai.").trim()
             return FlowSubmitResult(clicked = false, confirmed = false, how = "nocomposer")
         }
+        typedPrompt = prompt
         delay(500L)
         return pressSend()
+    }
+
+    /** ROUND 15.7 — the exact text we typed, remembered so "did Flow take it?" is answerable. */
+    @Volatile private var typedPrompt: String = ""
+
+    override suspend fun promptStillInComposer(): Boolean {
+        val want = typedPrompt.take(40).trim()
+        if (want.isEmpty()) return false
+        val now = genState() ?: return false
+        val value = now.value.trim()
+        if (value.isEmpty()) return false
+        // Compare the beginning of both: Flow may trim or add a trailing newline.
+        return value.take(24).equals(want.take(24), ignoreCase = true) ||
+            (want.length >= 12 && value.contains(want.take(18), ignoreCase = true))
     }
 
     /** Press the arrow on an already-typed prompt. Safe to call repeatedly. */
@@ -610,9 +625,15 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         val pickJs = FlowJs.PICK_ONE_IMAGE.replace("%1", cx.toString()).replace("%2", cy.toString())
         val picked = tappedOne != null || runCatching { eval(pickJs) }.getOrNull().let { it != null && it.contains("ok:") }
         delay(600L)
+        // ROUND 15.7 — if the chip still is not on 1, drive the control itself (slider / minus / numeric).
+        var chip = runCatching { eval(FlowJs.CHIP_STATE) }.getOrNull()?.let { unquoteJson(it) }.orEmpty()
+        if (!Regex("(^|[^0-9])x?1([^0-9]|$)").containsMatchIn(chip)) {
+            runCatching { eval(FlowJs.FORCE_ONE_IMAGE) }
+            delay(700L)
+            chip = runCatching { eval(FlowJs.CHIP_STATE) }.getOrNull()?.let { unquoteJson(it) }.orEmpty()
+        }
         runCatching { eval(FlowJs.CLOSE_MENUS) }
         delay(300L)
-        val chip = runCatching { eval(FlowJs.CHIP_STATE) }.getOrNull()?.let { unquoteJson(it) }.orEmpty()
         val verified = picked && Regex("(^|[^0-9])x?1([^0-9]|$)").containsMatchIn(chip)
         val oneNote = when {
             verified -> "set ✓"
