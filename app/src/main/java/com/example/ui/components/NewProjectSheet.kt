@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -56,7 +55,7 @@ import com.example.util.ProjectDataManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-enum class NewProjectChoice { ADVANCE_EDITING, AI_VIDEO, EDIT_WITH_AI, AI_VOICE_ON_VIDEO, VOICE_OVER_TO_VIDEO, BLANK, MORE }
+enum class NewProjectChoice { AI_VIDEO, EDIT_WITH_AI, AI_VOICE_ON_VIDEO, VOICE_OVER_TO_VIDEO, BLANK, MORE }
 
 /** When each video project was last opened or created in this app (used for "last edited" in the recent list). */
 object RecentProjects {
@@ -106,7 +105,6 @@ fun NewProjectSheet(onDismiss: () -> Unit, onChoice: (NewProjectChoice) -> Unit,
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("New project", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Text("Choose how you want to start", color = Color(0xFF9E95AC), fontSize = 12.sp)
-            AdvanceCard { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.ADVANCE_EDITING) }
             ChoiceRow(Icons.Filled.AutoAwesome, "AI video (Zero to Video)", "Topic or script → researched, animated, narrated video") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.AI_VIDEO) }
             ChoiceRow(Icons.Filled.ContentCut, "Edit my video with AI", "Analyze your footage and build a reversible edit plan") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.EDIT_WITH_AI) }
             ChoiceRow(Icons.Filled.RecordVoiceOver, "AI voice on my video", "Edit your footage and add AI narration that matches it") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.AI_VOICE_ON_VIDEO) }
@@ -172,41 +170,4 @@ private fun loadThumb(ctx: Context, p: VideoProjectData): Bitmap? {
             try { r.setDataSource(ctx, uri); r.getFrameAtTime(0L) } finally { r.release() }
         }
     } catch (_: Exception) { null }
-}
-
-/**
- * SAIF AI ADVANCE EDITING — the highlighted entry at the top of the purple "+" sheet. It opens the full
- * production engine that ships inside the app (finance? no — film): trend scan, voiceover alignment,
- * element cut-outs, shot planning, broadcast mix and master render, plus the whole skills/fonts library.
- */
-@Composable
-private fun AdvanceCard(onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF1B1130),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF8B5CF6)),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).clickable(onClick = onClick)
-    ) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(
-                    androidx.compose.ui.graphics.Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF06B6D4)))
-                ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Filled.Bolt, null, tint = Color.White, modifier = Modifier.size(22.dp))
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("SAIF AI ADVANCE EDITING", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(6.dp))
-                    Box(Modifier.clip(RoundedCornerShape(6.dp)).background(Aqua.copy(alpha = 0.22f)).padding(horizontal = 6.dp, vertical = 1.dp)) {
-                        Text("NEW", color = Aqua, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Text("Advance Studio engine — trends, cut-outs, shots, mix, master", color = Color(0xFFB9AECB), fontSize = 11.sp)
-            }
-        }
-    }
 }
