@@ -118,9 +118,9 @@ object OverlayBoundary {
                 animIn = "scaleIn", animInMs = (320L + delay).coerceAtMost(600L),
                 animOut = "fadeOut", animOutMs = 240L,
                 keyframes = listOf(
-                    PlacementKey(0L, c.x, c.y, 0.94f, 0f, "easeOut"),
-                    PlacementKey((220L + delay).coerceAtMost(dur / 2), c.x, c.y, 1f, 1f, "overshoot"),
-                    PlacementKey((dur - 200L).coerceAtLeast(400L), c.x, c.y, 1.03f, 1f, "easeInOut")
+                    PlacementKey(tMs = 0L, x = c.x, y = c.y, scale = 0.94f, rotation = 0f, opacity = 0f, easing = "easeOut"),
+                    PlacementKey(tMs = (220L + delay).coerceAtMost(dur / 2), x = c.x, y = c.y, scale = 1f, rotation = 0f, opacity = 1f, easing = "overshoot"),
+                    PlacementKey(tMs = (dur - 200L).coerceAtLeast(400L), x = c.x, y = c.y, scale = 1.03f, rotation = 0f, opacity = 1f, easing = "easeInOut")
                 )
             )
         }
