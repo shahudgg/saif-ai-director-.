@@ -1,10 +1,11 @@
 name: Extract DeepX studio source
 
 # The DeepX zip is stored in Git LFS (a 461 MB blob). The development sandbox can reach
-# github.com / api.github.com but NOT the LFS object hosts (media.githubusercontent.com,
-# github-cloud.s3.amazonaws.com), so this workflow does the extraction on a GitHub runner —
-# which has full network + LFS access — and pushes the FILTERED SOURCE back to a normal branch
-# that can be read with a plain `git fetch`.
+# github.com / api.github.com but NOT the LFS object hosts, so this workflow does the heavy
+# work on a GitHub runner (full network + LFS) and pushes the FILTERED SOURCE back as normal
+# files on a plain branch that the sandbox can read with `git fetch`.
+# Every stage is logged into deepx_meta/status.txt and pushed even when a stage fails, so a
+# failure is always visible from the sandbox (no run logs are reachable there).
 on:
   push:
     paths:
@@ -17,95 +18,91 @@ permissions:
 jobs:
   extract:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
-      - name: Checkout (with LFS)
+      - name: Checkout (no LFS yet, so we can always push status)
         uses: actions/checkout@v4
         with:
-          lfs: true
           fetch-depth: 1
 
-      - name: Materialise the LFS zip
+      - name: Pull the LFS zip and extract everything
         run: |
-          set -e
-          FILE="deepx video generator studio.zip"
-          ls -lh "$FILE"
-          head -c 200 "$FILE" | strings | head -3
-          git lfs pull --include="$FILE" || true
-          ls -lh "$FILE"
-          python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); print('entries', len(z.infolist()))" "$FILE"
-
-      - name: Extract + filter source
-        run: |
-          python3 - <<'PY'
-          import zipfile, os, json, shutil
+          LOG=deepx_meta/status.txt
+          mkdir -p deepx_meta
+          echo "== runner $(date -u) ==" > $LOG
+          echo "-- zip pointer file:" >> $LOG
+          ls -l "deepx video generator studio.zip" >> $LOG 2>&1
+          echo "-- git lfs version:" >> $LOG
+          git lfs version >> $LOG 2>&1
+          echo "-- git lfs pull:" >> $LOG
+          git lfs pull --include="deepx video generator studio.zip" >> $LOG 2>&1
+          echo "exit=$?" >> $LOG
+          ls -l "deepx video generator studio.zip" >> $LOG 2>&1
+          python3 - <<'PY' 2>&1 | tee -a deepx_meta/status.txt
+          import zipfile, os, json, shutil, traceback
           src = "deepx video generator studio.zip"
           out = "deepx_src"
-          shutil.rmtree(out, ignore_errors=True)
-          os.makedirs("deepx_meta", exist_ok=True)
-
           CODE = {".ts",".tsx",".js",".jsx",".mjs",".cjs",".css",".scss",".sass",".less",
                   ".html",".htm",".json",".md",".txt",".yml",".yaml",".py",".vue",".svelte",
                   ".toml",".gradle",".kt",".java",".xml",".properties",".sql",".env",".example",
-                  ".sh",".gitignore",".dockerfile",".lock"}
-          MEDIA = {".png",".jpg",".jpeg",".webp",".gif",".ico",".svg",".woff",".woff2",".ttf",".otf",".mp3",".mp4"}
+                  ".sh",".gitignore",".lock"}
+          MEDIA = {".png",".jpg",".jpeg",".webp",".gif",".ico",".svg",".woff",".woff2",".ttf",".otf"}
           SKIP = {"node_modules",".git","dist","build","out",".next",".nuxt","coverage",".cache",
                   "Pods","__pycache__",".gradle",".idea",".vscode","venv",".venv","target",".turbo"}
           SKIP_FILES = {"package-lock.json","yarn.lock","pnpm-lock.yaml",".DS_Store"}
-
-          total = 0
-          count = 0
-          skipped_large = 0
-          CAP = 95_000_000
-          listing = []
-          with zipfile.ZipFile(src) as z:
-              infos = z.infolist()
-              listing = [(i.filename, i.file_size) for i in infos]
-              for i in infos:
-                  if i.is_dir():
-                      continue
-                  name = i.filename.replace("\\", "/")
-                  parts = set(name.split("/"))
-                  if parts & SKIP:
-                      continue
-                  base = os.path.basename(name)
-                  if base in SKIP_FILES:
-                      continue
-                  ext = os.path.splitext(name)[1].lower()
-                  if not (ext in CODE or ext in MEDIA):
-                      continue
-                  limit = 4_000_000 if ext in CODE else 700_000
-                  if i.file_size > limit:
-                      skipped_large += 1
-                      continue
-                  if total > CAP:
-                      continue
-                  try:
-                      data = z.read(i)
-                  except Exception:
-                      continue
-                  dest = os.path.join(out, name)
-                  os.makedirs(os.path.dirname(dest) or out, exist_ok=True)
-                  with open(dest, "wb") as f:
-                      f.write(data)
-                  total += len(data)
-                  count += 1
-
-          with open("deepx_meta/listing.txt", "w") as f:
-              f.write("\n".join(f"{n}\t{s}" for n, s in listing[:20000]))
-          json.dump({"files": count, "bytes": total, "zip_entries": len(listing), "skipped_large": skipped_large},
-                    open("deepx_meta/summary.json", "w"), indent=2)
-          print("kept", count, "files,", total, "bytes of", len(listing), "entries; skipped_large", skipped_large)
+          try:
+              shutil.rmtree(out, ignore_errors=True)
+              with zipfile.ZipFile(src) as z:
+                  infos = z.infolist()
+                  listing = [(i.filename, i.file_size) for i in infos]
+                  open("deepx_meta/listing.txt","w").write("\n".join(f"{n}\t{s}" for n, s in listing[:20000]))
+                  total = count = skipped = 0
+                  CAP = 95_000_000
+                  for i in infos:
+                      if i.is_dir():
+                          continue
+                      name = i.filename.replace("\\", "/")
+                      if set(name.split("/")) & SKIP:
+                          continue
+                      base = os.path.basename(name)
+                      if base in SKIP_FILES:
+                          continue
+                      ext = os.path.splitext(name)[1].lower()
+                      if not (ext in CODE or ext in MEDIA):
+                          continue
+                      if i.file_size > (4_000_000 if ext in CODE else 700_000):
+                          skipped += 1
+                          continue
+                      if total > CAP:
+                          continue
+                      try:
+                          data = z.read(i)
+                      except Exception:
+                          continue
+                      dest = os.path.join(out, name)
+                      os.makedirs(os.path.dirname(dest) or out, exist_ok=True)
+                      open(dest, "wb").write(data)
+                      total += len(data); count += 1
+                  json.dump({"files": count, "bytes": total, "zip_entries": len(infos), "skipped_large": skipped},
+                            open("deepx_meta/summary.json", "w"), indent=2)
+                  print("EXTRACTED", count, "files", total, "bytes of", len(infos), "entries")
+          except Exception:
+              print("EXTRACT_FAILED")
+              traceback.print_exc()
           PY
+          echo "-- top level of extracted source:" >> $LOG
+          ls deepx_src >> $LOG 2>&1
+          du -sh deepx_src >> $LOG 2>&1
 
-      - name: Push extracted source to a normal branch
+      - name: Push extracted source + status
+        if: always()
         run: |
-          set -e
-          ls deepx_src | head -20
-          cat deepx_meta/summary.json
+          LOG=deepx_meta/status.txt
+          ls deepx_src > deepx_meta/top.txt 2>&1 || true
+          du -sh deepx_src >> deepx_meta/top.txt 2>&1 || true
           git config user.name "saif-extractor"
           git config user.email "noreply@example.com"
-          git checkout -B deepx-extracted
-          git add -A deepx_src deepx_meta
-          git -c core.quotepath=false commit -m "DeepX studio: filtered source (no node_modules/build) for 1:1 port into SAIF AI" || echo "nothing to commit"
-          git push --force origin deepx-extracted
+          git checkout -B deepx-extracted 2>&1 | tee -a $LOG
+          git add -A deepx_src deepx_meta 2>&1 | tee -a $LOG
+          git commit -m "DeepX studio: filtered source + extraction status" 2>&1 | tee -a $LOG || true
+          git push --force origin deepx-extracted 2>&1 | tee -a $LOG
