@@ -807,6 +807,16 @@ class DirectorController(
      * downloads + verifies every picture, and hands the plan back to [onFlowPlanReady].
      */
     fun prepareFlowPlan(autoStart: Boolean = true, autoFinish: Boolean = false) {
+        // ROUND 15.6 — NO-LOGIN PATH. When the owner has an image-capable API key (Gemini / OpenAI /
+        // OpenRouter / custom), the pictures are generated inside the app in the background: no Flow
+        // browser, no Google account, nothing to log into. The Flow browser stays available as the
+        // fallback when no key is configured.
+        val profile = runCatching { com.example.studio.ai.AiProfile.fromSettings(appContext) }.getOrNull()
+        if (profile != null && com.example.llm.ImageGen.canGenerate(profile.provider, profile.apiKey) && !_ui.value.working) {
+            say("API key mil gaya — images app ke andar background mein ban jayengi (Flow login ki zaroorat nahi).")
+            generateImagesInApp(autoFinish = autoFinish)
+            return
+        }
         val m = _ui.value.manifest ?: run {
             say("Pehle scene plan banao (🤖 SAIF Agent ya Confirm & start), phir Flow prompts usi script se banenge.", error = true)
             return
@@ -831,6 +841,61 @@ class DirectorController(
                 "phir Start dabao: SAIF khud ek-ek prompt generate karega (8 s gap), download karega aur verify karega.")
             pendingAutoFinish = autoFinish
             com.example.flow.web.FlowBrowserActivity.start(appContext, projectId, autoStart, _ui.value.brief.prompt, autoFinish)
+        } }
+    }
+
+    /**
+     * ROUND 15.6 — BACKGROUND IMAGE RUN (NO LOGIN).
+     *
+     * Generates one key visual per scene with the owner's OWN provider key (Gemini "Nano Banana" class
+     * models, OpenAI gpt-image, OpenRouter or any OpenAI-compatible base URL), saves every picture, places
+     * it as a planned full-frame backdrop, rebuilds the timeline and — when asked — applies it.
+     *
+     * Nothing here touches a browser: there is no Google account, no Flow session and no temp-mail step.
+     * Anything that fails is reported with the provider's own words; nothing is faked.
+     */
+    fun generateImagesInApp(autoFinish: Boolean = false) {
+        val m = _ui.value.manifest ?: run {
+            say("Pehle scene plan banao (🤖 SAIF Agent ya Confirm & start), phir images banengi.", error = true)
+            return
+        }
+        if (_ui.value.working) return
+        update { copy(working = true, problems = emptyList()) }
+        job = scope.launch { guarded {
+            val b = _ui.value.brief
+            val profile = com.example.studio.ai.AiProfile.fromSettings(appContext)
+            status(DirectorStage.GENERATING_ANIMATIONS, "Background images (koi login nahi)", detail = "0/${m.scenes.size}")
+            val (gen, note) = services.generateSceneImages(b, m) { i, n, t ->
+                status(DirectorStage.GENERATING_ANIMATIONS, "Image $i/$n", i.toFloat() / n, t)
+            }
+            gate()
+            note?.let { say(it) }
+            if (gen.isEmpty()) {
+                update { copy(working = false) }
+                say("Image generate nahi hui — provider key check karo (Settings → API provider). " +
+                    "Kuch bhi delete nahi hua.", error = true)
+                return@guarded
+            }
+            assets = assets.filterNot { it.source.startsWith("ai-image:") } + gen
+            store.saveArtifacts(projectId, workflow, narrationClips, assets)
+            status(DirectorStage.BUILDING_TIMELINE, "Timeline ban raha hai")
+            val (assembled, probs) = TimelineAssembler.assemble(getProject(), m, narrationClips, assets,
+                captions = b.subtitles?.startsWith("No", true) != true, aspect = b.aspect,
+                sfx = SfxFiles.render(appContext, m, library = { kind -> sfxLibrary(kind) }),
+                captionStyle = BrandKit.captionStyle(appContext))
+            val (p, musicNotes) = attachCheckedMusic(assembled, m, b)
+            gate()
+            pendingProject = p
+            update { copy(problems = probs + musicNotes, working = false, readyToApply = true,
+                status = JobStatus(DirectorStage.READY_FOR_PREVIEW, "${gen.size} background images ready (no login)")) }
+            val model = com.example.llm.ImageGen.imageModel(profile.provider, profile.activeModel)
+            say("✅ " + gen.size + " images app ke andar background mein ban gayi — Flow login ki zaroorat nahi.\n" +
+                "• Model: " + model + "\n" +
+                "• Har image full-frame backdrop hai, scene ke animation uske upar chalte hain.\n" +
+                (if (probs.isNotEmpty() || musicNotes.isNotEmpty())
+                    "• Notes: " + (probs + musicNotes).take(5).joinToString(" | ") + "\n" else "") +
+                "Timeline ready — 'Add to timeline' dabao (ya already lag gaya).")
+            if (autoFinish) applyToTimeline()
         } }
     }
 

@@ -178,7 +178,7 @@ object SaifDiagnostics {
     }
 
     fun report(context: Context, checks: List<Check>): String = buildString {
-        appendLine("SAIF AI — SELF TEST · build 15.5")
+        appendLine("SAIF AI — SELF TEST · build 15.6")
         appendLine("device: " + Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE)
         appendLine("passed: " + checks.count { it.ok } + "/" + checks.size)
         appendLine()
