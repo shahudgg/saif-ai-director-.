@@ -582,6 +582,12 @@ class DirectorController(
     private suspend fun produceFromScript(script: String) {
         ensureSeed()
         val b = _ui.value.brief
+        // ROUND 16.0 — say out loud which art direction the topic produced.
+        runCatching {
+            val dir = com.example.studio.composer.TopicStyle.forTopic(
+                listOf(b.prompt, b.style.orEmpty(), b.audience.orEmpty(), b.userScript).joinToString(" "))
+            say("🎬 Art direction: " + dir.domain.label + " — palette family, layout grammar aur camera usi duniya ke hisaab se set hain.")
+        }
         status(DirectorStage.PLANNING_SCENES, "Planning scenes and animations")
         val epoch = beginStoryboard()
         var manifest = services.planManifest(b, script,

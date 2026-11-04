@@ -41,9 +41,13 @@ object SceneVarietyComposer {
             (!it.needsQuote || beat.intent == Intent.QUOTE) &&
             (it.type != "stack" || (beat.numbers.size >= 2 && beat.numbers.take(6).sum() <= 100f)) &&
             (it.type != "heat" || beat.numbers.size >= 6) }
-        val offset = ((dna?.seed ?: 0).toLong() + beat.index.toLong() * 17L).mod(usable.size.toLong()).toInt()
-        for (a in usable.indices) for (layout in 0 until LAYOUTS) {
-            val archetype = usable[(offset + a) % usable.size]
+        // ROUND 16.0 — topic archetypes first (orbit/radar for space, bars/line for business, steps for
+        // an explainer…), then the rest. Ordering only; every family stays available as a fallback.
+        val preferred = dna?.topic?.archetypes.orEmpty()
+        val ordered = usable.sortedBy { a -> preferred.indexOf(a.type).let { if (it < 0) 99 else it } }
+        val offset = ((dna?.seed ?: 0).toLong() + beat.index.toLong() * 17L).mod(ordered.size.toLong()).toInt()
+        for (a in ordered.indices) for (layout in 0 until LAYOUTS) {
+            val archetype = ordered[(offset + a) % ordered.size]
             val variant = (layout + beat.index + (dna?.variantShift ?: 0)).mod(LAYOUTS)
             val g = compose(beat, aspect, archetype, variant, dna, accentOverride)
             val (aw, ah) = LayoutEngine.parseAspect(aspect)
@@ -101,7 +105,12 @@ object SceneVarietyComposer {
         // ROUND 15.7 — the composition grammar decides the STRUCTURE of this beat (layout family +
         // the illustration that really shows its data + the animated boundary card that owns it), so two
         // different topics never come out looking like the same template.
-        val grammarVariant = SceneGrammar.variantFor(beat, dna) + v
+        // ROUND 16.0 — the topic's own art direction decides which composition grammars are allowed,
+        // so a space video does not borrow the layout family of a business explainer.
+        val topic = dna?.topic ?: TopicStyle.general()
+        val baseVariant = SceneGrammar.variantFor(beat, dna) + v
+        val grammarVariant = if (topic.grammars.isEmpty()) baseVariant
+            else topic.grammars[((baseVariant % topic.grammars.size) + topic.grammars.size) % topic.grammars.size]
         val decorated = SceneGrammar.decorate(beat, base, palette, accent, dur, grammarVariant)
         return LayoutEngine.repair(decorated, aw, ah, dur).graph
     }

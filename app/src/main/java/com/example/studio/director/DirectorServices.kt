@@ -612,7 +612,10 @@ class DirectorServices(private val context: Context, private val activity: Agent
         var ok = 0; var failed = 0
         m.scenes.forEachIndexed { i, sc ->
             currentCoroutineContext().ensureActive()
-            val prompt = sc.imagePrompt.ifBlank { imagePromptFor(sc, b, dna, aspect) }
+            // ROUND 16.0 — every key visual is requested in the topic's own visual language.
+            val art = dna.topic.imageTreatment
+            val prompt = sc.imagePrompt.ifBlank { imagePromptFor(sc, b, dna, aspect) } +
+                " Visual direction: " + art + ". Absolutely no text, letters, numbers or watermark in the image."
             onStep(i + 1, m.scenes.size, "AI key visual for scene ${i + 1}/${m.scenes.size}")
             val ev = activity?.begin(ActivityKind.IMAGE_GEN, "Key visual · scene ${i + 1}/${m.scenes.size}", prompt.take(220))
             val r = cancellableResult { ImageGen.generate(prompt, aspect, prof.provider, prof.apiKey, prof.activeModel, prof.customBaseUrl) }

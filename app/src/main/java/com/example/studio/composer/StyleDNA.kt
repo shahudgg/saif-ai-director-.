@@ -10,6 +10,8 @@ data class StyleDNA(
     val variantShift: Int,
     val backdrop: Int,          // 0 particles+glow, 1 grid, 2 rings, 3 aurora, 4 scan sweep
     val ornament: Int,          // 0 progress bar + tag pill, 1 corner brackets + tag pill, 2 progress bar only, 3 brackets + progress bar
+    /** ROUND 16.0 — the art direction for the topic world (space / tech / history / nature / …). */
+    val topic: TopicStyle = TopicStyle.general(),
     val signature: String = "" // stable identity of normalized creative brief
 ) {
     /** Palette for beat [index]; alert/excited beats pick the warm entries so emotion still reads. */
@@ -64,7 +66,12 @@ data class StyleDNA(
             val seed = ((hash[0].toInt() and 255) shl 24) or ((hash[1].toInt() and 255) shl 16) or
                 ((hash[2].toInt() and 255) shl 8) or (hash[3].toInt() and 255)
             val signature = "v2-" + hash.joinToString("") { "%02x".format(java.util.Locale.ROOT, it.toInt() and 255) }
-            return from(seed).copy(signature = signature)
+            val base = from(seed)
+            // Topic-first palettes: a space video is never given a business palette by accident. The
+            // owner's seed still decides the ORDER inside that family, so two space videos differ.
+            val topic = TopicStyle.forTopic(listOf(brief.prompt, brief.style, brief.audience, brief.userScript).joinToString(" "))
+            val rotated = base.palettes.sortedBy { p -> topic.paletteIds.indexOf(StyleDNA.BANK.indexOf(p)).let { if (it < 0) 99 else it } }
+            return base.copy(palettes = rotated, topic = topic, signature = signature)
         }
 
         /** A fresh random seed, stored as text in the brief's answers. */
