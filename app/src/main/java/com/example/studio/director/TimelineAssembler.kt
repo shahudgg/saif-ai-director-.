@@ -69,7 +69,9 @@ object PlacementApplier {
         val p = AssetPlacements.clamp(a.placement ?: fallback)
         // A clip is never a small sticker: the preview plays video full-frame, so keep clips as backdrops.
         val safe = if (a.kind == "video") p.copy(role = "backdrop", width = 1f, height = 1f, fit = "cover") else p
-        return AssetPlacements.clamp(safe.copy(keyframes = AssetPlacements.sanitizeKeys(safe.keyframes, sceneDurationMs)))
+        // ROUND 15.4 — floating layers must stay fully inside the frame; only backdrops are allowed to bleed.
+        val bounded = if (safe.role == "backdrop") AssetPlacements.clamp(safe) else AssetPlacements.clampSafe(safe)
+        return bounded.copy(keyframes = AssetPlacements.sanitizeKeys(bounded.keyframes, sceneDurationMs))
     }
 
     fun effects(p: AssetPlacement): ItemEffects = ItemEffects(

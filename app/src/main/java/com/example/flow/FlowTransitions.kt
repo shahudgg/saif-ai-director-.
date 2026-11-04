@@ -102,7 +102,22 @@ object FlowPlacement {
         val realCut = slot.cutPath.isNotBlank()
         val sticker = realCut || slot.role == FlowRoles.STICKER || (slot.role == FlowRoles.KEYFRAME && r.cornerUniform)
         val cutout = !realCut && slot.role == FlowRoles.KEYFRAME && r.needsBgRemove
-        val base = if (sticker) {
+        // ROUND 15.4: use the layout that was PLANNED for this slot when the picture was verified.
+        val planned = SlotLayout.fromJson(slot.layout)
+        val base = if (planned != null && !planned.isBackdrop) {
+            AssetPlacement(
+                x = planned.x, y = planned.y, width = planned.w, height = planned.h,
+                fit = planned.fit, role = "sticker",
+                shadow = 0.22f, corner = if (slot.role == FlowRoles.STICKER) 0.06f else 0f
+            )
+        } else if (planned != null) {
+            // Backdrop: always full frame. A measured focal point only shifts the crop, never the edges.
+            AssetPlacement(
+                x = 0.5f, y = 0.5f, width = 1f, height = 1f,
+                fit = if (planned.fit == "contain") "contain" else r.fit,
+                role = "backdrop"
+            )
+        } else if (sticker) {
             AssetPlacement(
                 x = 0.5f + r.cropX, y = 0.42f + r.cropY,
                 width = 0.62f, height = 0.46f, fit = "contain", role = "sticker",
@@ -130,7 +145,9 @@ object FlowPlacement {
             animOutMs = 260L,
             keyframes = kenBurns(slot, sceneDurationMs, r, sticker)
         )
-        return AssetPlacements.clamp(withLook)
+        // Floating layers are pushed back inside the safe area; backdrops are allowed to bleed.
+        return if (withLook.role == "backdrop") AssetPlacements.clamp(withLook)
+        else AssetPlacements.clampSafe(withLook)
     }
 
     /**

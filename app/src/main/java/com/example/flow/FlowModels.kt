@@ -51,7 +51,13 @@ data class FlowSlot(
     /** ROUND 15.2 — transparent PNG produced locally by [FlowCutout] (empty = background not removed). */
     val cutPath: String = "",
     /** Dominant border colour measured while cutting out (kept for the chroma fallback). */
-    val borderHex: String = ""
+    val borderHex: String = "",
+    /**
+     * ROUND 15.4 — the layout this picture was PLANNED for (JSON of [SlotLayout]): rect inside the safe
+     * area, fit mode, depth and motion. Written the moment the picture is verified, so the timeline uses
+     * exactly the plan that was shown, never a second guess.
+     */
+    val layout: String = ""
 ) {
     val done: Boolean get() = status == FlowSlotStatus.VERIFIED || status == FlowSlotStatus.DOWNLOADED
 }
@@ -156,7 +162,7 @@ object FlowJson {
         put("status", s.status.name); put("tries", s.tries)
         put("imagePath", s.imagePath); put("imageUrl", s.imageUrl); put("imageHash", s.imageHash)
         put("error", s.error)
-        put("cut", s.cutPath); put("border", s.borderHex)
+        put("cut", s.cutPath); put("border", s.borderHex); put("layout", s.layout)
         s.review?.let { put("review", reviewToJson(it)) }
     }
 
@@ -176,7 +182,8 @@ object FlowJson {
         review = o.optJSONObject("review")?.let { reviewFromJson(it) },
         error = o.optString("error"),
         cutPath = o.optString("cut"),
-        borderHex = o.optString("border")
+        borderHex = o.optString("border"),
+        layout = o.optString("layout")
     )
 
     fun reviewToJson(r: FlowReview): JSONObject = JSONObject().apply {

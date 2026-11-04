@@ -66,6 +66,12 @@ interface FlowDriver {
     suspend fun pressSend(): FlowSubmitResult =
         FlowSubmitResult(clicked = false, confirmed = false, how = "nosupport")
 
+    /**
+     * ROUND 15.4 — create a brand-new Flow project (so pictures from older projects can never be picked up).
+     * Returns true only when a fresh project with a usable composer is on screen.
+     */
+    suspend fun newProject(): Boolean = false
+
     /** ROUND 15.3 — pick Flow's own aspect-ratio control before generating. */
     suspend fun setAspect(aspect: String): Boolean = false
 
@@ -122,6 +128,17 @@ class FlowAutopilot(
         if (total == 0) {
             state(FlowPhase.FAILED, 0, 0, "No prompts in the plan.")
             return current
+        }
+        // ---- 0. ROUND 15.4: a run with nothing finished yet ALWAYS starts in a brand-new Flow project ----
+        // The owner hit exactly this: a picture was generated but the app picked up an old project's picture.
+        // Working inside a fresh project removes those pictures from the page entirely, and the capture
+        // layer additionally refuses anything that was not armed for the running prompt.
+        if (current.slots.none { it.done }) {
+            state(FlowPhase.GENERATING, 0, total, "Naya Flow project ban raha hai — purane project ki images use nahi hongi…")
+            val made = runCatching { driver.newProject() }.getOrDefault(false)
+            state(FlowPhase.GENERATING, 0, total,
+                if (made) "Naya project ready ✓ — is project ke andar hi ek-ek image banegi."
+                else "Naya project confirm nahi hua — phir bhi sirf armed prompt ke baad aayi image lega.")
         }
         var done = 0
         for (slot in slots) {
@@ -246,10 +263,15 @@ class FlowAutopilot(
             } else ""
             val review = local?.copy(aiVerdict = ai)
             val status = if (review != null && review.ok) FlowSlotStatus.VERIFIED else FlowSlotStatus.DOWNLOADED
-            current = current.withSlot(running.copy(
+            // ROUND 15.4 — the picture's LAYOUT is planned now, before it enters the timeline: role, exact
+            // rectangle inside the safe area, fit, depth and motion. The assembly uses these very numbers.
+            val measured = running.copy(
                 status = status, imagePath = record.path, imageUrl = record.url,
-                imageHash = record.hash, review = review,
-                cutPath = cutPath, borderHex = borderHex,
+                imageHash = record.hash, review = review, cutPath = cutPath, borderHex = borderHex
+            )
+            val planned = FlowLayoutPlanner.plan(measured, running.sceneMs, current.aspect)
+            current = current.withSlot(measured.copy(
+                layout = planned.toJson(),
                 error = when {
                     review == null -> "Picture decode nahi hui"
                     !review.ok -> "Quality gate: " + review.verdict
@@ -260,7 +282,9 @@ class FlowAutopilot(
             onPlan(current)
             done++
             val cutNote = if (cutPath.isNotBlank()) " · background hataya" else ""
-            state(FlowPhase.GENERATING, done, total, "Verified: " + (review?.verdict ?: "picture saved") + cutNote, true, record.path)
+            state(FlowPhase.GENERATING, done, total,
+                "Verified: " + (review?.verdict ?: "picture saved") + cutNote +
+                    " · jagah: " + FlowLayoutPlanner.describe(planned), true, record.path)
             // ---- 6. the owner's 8 second gap between prompts ----
             if (done < total) delay(delayMs.coerceAtLeast(FlowSettings.MIN_DELAY_MS))
         }

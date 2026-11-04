@@ -70,6 +70,11 @@ class FlowWebSession(private val context: Context) : FlowDriver {
     private var pollJob: Job? = null
     private val cookies get() = CookieManager.getInstance()
 
+    /** ROUND 15.4 — the prompt index the capture layer is currently armed for (-1 = nothing). */
+    @Volatile private var armedIndex: Int = -1
+    /** ROUND 15.4 — every media URL already handed to a slot; a URL is never used twice. */
+    private val usedMedia: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet<String>())
+
     private val _info = MutableStateFlow(FlowPageInfo(url = FlowSettings.lastUrl(context)))
     val pageInfo: StateFlow<FlowPageInfo> = _info.asStateFlow()
 
@@ -342,7 +347,52 @@ class FlowWebSession(private val context: Context) : FlowDriver {
     override suspend fun arm(promptIndex: Int): Boolean {
         val js = FlowJs.ARM.replace("%d", promptIndex.toString())
         val r = eval(js)
-        return r != null && r.contains("ok")
+        val ok = r != null && r.contains("ok")
+        if (ok) armedIndex = promptIndex else armedIndex = -1
+        return ok
+    }
+
+    /**
+     * ROUND 15.4 — START A NEW FLOW PROJECT.
+     *
+     * The owner's report was exact: a picture was generated, but the app downloaded a picture from an old
+     * project instead. The cure is to never work inside an old project at all. This creates a fresh one
+     * (or proves the current page is already empty), waits for its composer, re-injects the capture layer
+     * and clears the "already used" list — so only pictures born in this new project can ever be captured.
+     */
+    override suspend fun newProject(): Boolean {
+        var attempt = 0
+        var created = false
+        while (attempt < 6 && !created) {
+            attempt++
+            val raw = runCatching { eval(FlowJs.CREATE_PROJECT.replace("%s", JSONObject.quote(FLOW_HOME))) }
+                .getOrNull().orEmpty()
+            when {
+                raw.contains("ok:fresh-project") -> created = true
+                raw.contains("ok:clicked") -> { delay(4_000L); created = true }
+                raw.contains("navigating") -> delay(5_000L)
+                else -> delay(3_000L)
+            }
+        }
+        if (!created) {
+            _log.value = (_log.value + "\nNaya Flow project nahi ban paya — is baar purane page par kaam.").trim()
+            return false
+        }
+        // The new project renders its composer after navigation: wait for it, then re-arm the capture layer.
+        var ready = false
+        var waited = 0
+        while (waited < 20 && !ready) {
+            waited++
+            delay(1_200L)
+            ready = runCatching { info().hasComposer }.getOrDefault(false)
+        }
+        runCatching { eval(FlowJs.SETUP) }
+        runCatching { eval(FlowJs.CAPTURE) }
+        armedIndex = -1
+        usedMedia.clear()
+        _log.value = (_log.value +
+            "\nNaya Flow project: " + if (ready) "ready ✓ (purane project ki images band)" else "composer abhi nahi mila").trim()
+        return ready
     }
 
     // ------------------------------------------------------- ROUND 15.3 · REAL TAPS
@@ -621,6 +671,10 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         fun onMedia(url: String, mime: String, width: Int, height: Int, promptIndex: Int, name: String) {
             if (!captureEnabled) return
             if (url.isBlank()) return
+            // ROUND 15.4 — only the prompt that is armed right now, and never the same URL twice.
+            if (armedIndex < 0) return
+            if (promptIndex >= 0 && promptIndex != armedIndex) return
+            if (!usedMedia.add(url)) return
             if (FlowMediaRules.isUiChrome(url) && !url.startsWith("blob:")) return
             if (url.startsWith("blob:")) {
                 // Blob results exist only inside the page: read them there and stream back as base64.
@@ -645,6 +699,8 @@ class FlowWebSession(private val context: Context) : FlowDriver {
         @JavascriptInterface
         fun onBase64Start(id: String, mime: String, width: Int, height: Int, promptIndex: Int, name: String, total: Int) {
             if (!captureEnabled) return
+            if (armedIndex < 0 && promptIndex >= 0) return
+            if (promptIndex >= 0 && promptIndex != armedIndex) return
             base64Builders[id] = StringBuilder()
             base64Meta[id] = Base64Meta(mime, width, height, promptIndex, name)
         }

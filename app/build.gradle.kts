@@ -18,8 +18,8 @@ android {
     // 26: required by SAIF AI AUTOMATION (JARVIS engine)
     minSdk = 26
     targetSdk = 36
-    versionCode = 153
-    versionName = "15.3"
+    versionCode = 154
+    versionName = "15.4"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

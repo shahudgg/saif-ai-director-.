@@ -883,7 +883,14 @@ class DirectorController(
             }
             val newManifest = m.copy(scenes = newScenes)
             // Resolve every picture with its measured placement.
-            val add = usable.map { slot ->
+            // ROUND 15.4 — older plans (or a slot whose picture arrived before layout planning existed) get
+            // their layout computed here, so every picture still lands on a planned, in-frame rectangle.
+            val placed = usable.map { slot ->
+                if (slot.layout.isBlank())
+                    slot.copy(layout = com.example.flow.FlowLayoutPlanner.plan(slot, slot.sceneMs, plan.aspect).toJson())
+                else slot
+            }
+            val add = placed.map { slot ->
                 val transition = transitionsByScene[slot.sceneId]?.type ?: "fade"
                 val placement = com.example.flow.FlowPlacement.forSlot(slot, slot.sceneMs, transition)
                 val path = slotPath(slot)
@@ -936,6 +943,14 @@ class DirectorController(
             if (soft > 0) append("• ").append(soft).append(" picture(s) soft hain — 1080p pe thodi blur dikh sakti hain.\n")
             if (ai.isNotEmpty()) append("• AI vision check: ").append(ai.first().take(100)).append("\n")
             if (trans.isNotEmpty()) append("• Transitions (pixels se): ").append(trans.take(180)).append("\n")
+            // ROUND 15.4 — no invented facts: only layouts that really exist are described.
+            val layouts = plan.slots.mapNotNull { s -> com.example.flow.SlotLayout.fromJson(s.layout) }
+            val floats = layouts.count { !it.isBackdrop }
+            if (layouts.isNotEmpty()) {
+                append("• Placement plan: ").append(layouts.size).append(" pictures — ")
+                append(floats).append(" floating layers safe area ke andar, ")
+                append(layouts.size - floats).append(" full-frame backdrops.\n")
+            }
             append("Sab kuch timeline pe editable hai — 'Add to timeline' dabao (ya already apply ho gaya).")
         }
     }

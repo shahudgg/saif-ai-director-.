@@ -225,6 +225,8 @@ object FlowJs {
   };
 
   function report(u, mime, el, w, h, pIdx){
+    if (!S.armed) return false;                       // ROUND 15.4: no prompt armed = no reporting
+    if (S.promptIndex !== undefined && pIdx !== S.promptIndex) return false;  // only the running prompt
     if (S.seen[u]) return false;
     S.seen[u] = 1;
     var name = (el && (el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title'))) || 'flow_media';
@@ -248,6 +250,7 @@ object FlowJs {
   }
 
   S.scan = function(force){
+    if (!S.armed) return 0;                           // ROUND 15.4: idle page never reports a picture
     var found = 0;
     var imgs = collectMedia(document, [], 0);
     for (var i = 0; i < imgs.length; i++) {
@@ -314,12 +317,28 @@ object FlowJs {
       var u = abs(e.currentSrc || e.src || '');
       if (u) snap[u] = 1;
     }
+    // ROUND 15.4: older projects paint results as CSS backgrounds — they must be in the "already there"
+    // snapshot too, otherwise a brand-new prompt can wrongly "capture" an old picture.
+    var bgs = document.querySelectorAll('[style*="background-image"]');
+    for (var b = 0; b < bgs.length; b++) {
+      var bi = bgs[b].style && bgs[b].style.backgroundImage;
+      var mm = /url\(["']?(.*?)["']?\)/.exec(bi || '');
+      if (mm && mm[1]) snap[abs(mm[1])] = 1;
+    }
+    var cvs = document.querySelectorAll('canvas');
+    for (var c = 0; c < cvs.length; c++) {
+      try {
+        var rr = cvs[c].getBoundingClientRect();
+        snap['canvas:' + cvs[c].width + 'x' + cvs[c].height + ':' + Math.round(rr.top)] = 1;
+      } catch(e) {}
+    }
     return snap;
   };
 
   S.arm = function(index){
     S.promptIndex = index;
     S.armed = true;
+    S.seen = {};                                     // ROUND 15.4: fresh start for every prompt
     var now = S.snapshot();
     for (var k in now) { if (now.hasOwnProperty(k)) S.base[k] = 1; }
     S.scan(true);
@@ -829,6 +848,52 @@ object FlowJs {
   }
   return out.slice(0, 6).join(' | ');
 })();
+"""
+
+    /** ROUND 15.4 -- start a BRAND-NEW Flow project, so pictures from older projects can never be picked up. */
+    val CREATE_PROJECT = """
+(function(home){
+  var S = window.__saifFlow || {};
+  function txt(el){
+    return ((el.innerText || el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' +
+            (el.getAttribute('title') || '') + ' ' + (el.getAttribute('data-testid') || ''))
+            .toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+  function vis(el){
+    try {
+      var r = el.getBoundingClientRect();
+      return !!r && r.width > 18 && r.height > 12 && r.bottom > 0;
+    } catch(e) { return false; }
+  }
+  // 1. THIS page is already a brand-new, empty project (composer present, no result pictures).
+  var c = S.composer ? S.composer() : null;
+  var results = 0;
+  var imgs = document.querySelectorAll('img,video');
+  for (var i = 0; i < imgs.length; i++) {
+    var im = imgs[i];
+    var w = im.naturalWidth || im.videoWidth || 0;
+    var h = im.naturalHeight || im.videoHeight || 0;
+    if (w >= 300 && h >= 300 && vis(im)) results++;
+  }
+  if (c && results === 0) return 'ok:fresh-project';
+  // 2. Click a "new project" style control on whatever page we are on.
+  var rx = /(new project|create project|start a project|blank project|new video|create video|start creating|naya project)/i;
+  var els = document.querySelectorAll('button,a,[role="button"],[aria-label],[data-testid]');
+  for (var j = 0; j < els.length; j++) {
+    var el = els[j];
+    if (!el || el.disabled || !vis(el)) continue;
+    var t = txt(el);
+    if (!t || t.length > 52) continue;
+    if (/(delete|remove|rename|duplicate|share)/.test(t)) continue;
+    if (!rx.test(t)) continue;
+    try { el.click(); return 'ok:clicked:' + t.slice(0, 30); } catch(e) {}
+  }
+  // 3. Nothing clickable here — go back to Flow home, where the "New project" tile lives.
+  try {
+    if (home && location.href.indexOf(home) !== 0) { location.href = home; return 'navigating'; }
+  } catch(e) {}
+  return 'notfound';
+})(%s);
 """
 
     val CLEAR_STORAGE = """
