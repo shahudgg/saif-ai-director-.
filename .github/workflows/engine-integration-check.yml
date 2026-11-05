@@ -1,0 +1,28 @@
+name: Embedded engine compile check
+on:
+  push:
+    branches: ["arena/**"]
+    paths:
+      - 'engine-integration/**'
+      - '.github/workflows/engine-integration-check.yml'
+permissions:
+  contents: read
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile source as Android library
+        shell: bash
+        run: |
+          set -o pipefail
+          bash vendor/antigem/gradlew -p engine-integration assembleDebug --no-daemon 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Report errors
+        if: failure()
+        run: |
+          grep -E '(^e: |^FAILURE:|^\* What went wrong:|^Execution failed|^> Could not|^BUILD FAILED)' "$RUNNER_TEMP/build.log" | head -30 | while IFS= read -r line; do echo "::error::$line"; done || true
