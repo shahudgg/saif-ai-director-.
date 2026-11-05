@@ -125,5 +125,5 @@ val bundleEngineResources by tasks.registering(Sync::class) {
     from("../vendor/antigem/extension_docs") { into("extension-docs") }
     into(layout.buildDirectory.dir("generated/engineAssets"))
 }
-android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/engineAssets"))
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/engineAssets").get().asFile)
 tasks.named("preBuild").configure { dependsOn(bundleEngineResources) }
