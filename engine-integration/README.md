@@ -1,20 +1,21 @@
 # Embedded engine compilation experiment
 
-This isolated Gradle project checks that the Android sources in `vendor/antigem` can compile as a library. It is not linked to the SAIF app, does not register the original Android components and is not a working embedded engine. The ordinary SAIF build is deliberately unaffected.
+This isolated Gradle project checks that the Android sources in `vendor/antigem` can compile as a library. The opt-in host build links this library and registers a small internal-only subset of activities and services. It is not a working embedded engine. The ordinary SAIF build is deliberately unaffected.
 
 ## Check
 
-With JDK 21 and the Android SDK installed:
+With JDK 21, Gradle 9.3.1 and the Android SDK installed:
 
 ```sh
-bash vendor/antigem/gradlew -p engine-integration assembleDebug
+gradle -p engine-integration assembleDebug
+gradle :app:assembleDebug -PembeddedEngine
 ```
 
 GitHub Actions runs this check on changes to this directory. The original source and its GPL license are under `vendor/antigem`.
 
 ## Remaining integration work
 
-- Reconcile the host and engine Gradle/Kotlin/plugin versions and dependency graphs, then integrate the library into the host APK and merge the original activity, services, providers, permissions, and assets without conflicts.
+- Complete and audit the host integration: the original UI, dependencies and selected components compile in an opt-in APK; remaining services, providers, permissions, assets and initialization are not yet complete.
 - The original recommended flavor assumes package `com.termux` and a target SDK of 28. SAIF uses a different application ID and targets SDK 36. The original source's alternate Ubuntu/PRoot path looks for `assets/bin/proot` or `libproot.so`, neither of which is present in the uploaded archive; it must be supplied and verified for supported ABIs and Android versions. Android restrictions on executing writable app files also need to be addressed. Do not rely on the official Termux application's private files or uninstall it.
 - Bundle the Go bridge, scripts, extension assets and docs, verify their checksums and handle runtime downloads, network failures, storage, upgrades and cancellation. Do not report installation success until actual execution is verified.
 - Test original screens and real chat, editor, terminal, browser and agent integration on devices, including one with official Termux installed. Preserve GPL notices and third-party license obligations when rebranding.

@@ -1,1 +1,27 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Experimental internal UI only; this manifest is not included in the normal SAIF build. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <application>
+        <activity android:name="com.example.gemini.MainActivity"
+            android:exported="false" android:theme="@style/Theme.Gemini"
+            android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize"
+            android:windowSoftInputMode="stateHidden|adjustResize" />
+        <activity android:name="com.example.gemini.TermuxActivity"
+            android:exported="false" android:theme="@style/Theme.Gemini"
+            android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize"
+            android:windowSoftInputMode="stateHidden|adjustResize" />
+        <activity android:name="com.example.gemini.ui.bubble.FloatingChatActivity"
+            android:exported="false" android:theme="@style/Theme.AntiGem.FloatingTranslucent"
+            android:windowSoftInputMode="stateHidden|adjustResize" />
+        <service android:name="com.termux.app.TermuxService" android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Background terminal and AI language server execution" />
+        </service>
+        <service android:name="com.example.gemini.data.adb.AdbPairingService" android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Wireless debugging pairing code entry" />
+        </service>
+    </application>
+</manifest>

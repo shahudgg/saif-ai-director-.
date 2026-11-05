@@ -119,3 +119,11 @@ wire {
 configurations.configureEach {
     resolutionStrategy.force("com.squareup.okhttp3:okhttp:4.12.0", "com.squareup.okhttp3:okhttp-android:4.12.0")
 }
+
+val bundleEngineResources by tasks.registering(Sync::class) {
+    from("../vendor/antigem/extensions") { into("browser-extensions") }
+    from("../vendor/antigem/extension_docs") { into("extension-docs") }
+    into(layout.buildDirectory.dir("generated/engineAssets"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/engineAssets"))
+tasks.named("preBuild").configure { dependsOn(bundleEngineResources) }

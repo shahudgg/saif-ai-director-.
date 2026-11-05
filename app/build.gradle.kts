@@ -26,6 +26,7 @@ android {
     // Telegram asset library: injected from CI secrets at build time, never committed to source.
     val tgToken = (System.getenv("TG_BOT_TOKEN") ?: "").trim().replace("\\", "").replace("\"", "")
     val tgChat = (System.getenv("TG_CHAT_ID") ?: "").trim().replace("\\", "").replace("\"", "")
+    buildConfigField("boolean", "EMBEDDED_ENGINE_EXPERIMENT", providers.gradleProperty("embeddedEngine").isPresent.toString())
     buildConfigField("String", "TG_BOT_TOKEN", "\"" + tgToken + "\"")
     buildConfigField("String", "TG_CHAT_ID", "\"" + tgChat + "\"")
   }

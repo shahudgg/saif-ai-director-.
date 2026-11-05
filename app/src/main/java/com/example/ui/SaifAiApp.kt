@@ -888,7 +888,10 @@ fun SaifAiApp(
                     showNewProjectSheet = false
                     if (choice == com.example.ui.components.NewProjectChoice.ADVANCE_ENGINE) {
                         // Use the specific component, never launch an unrelated official Termux installation.
-                        val intent = android.content.Intent().setClassName("com.termux", "com.example.gemini.MainActivity")
+                        val intent = android.content.Intent().setClassName(
+                            if (com.example.BuildConfig.EMBEDDED_ENGINE_EXPERIMENT) context.packageName else "com.termux",
+                            "com.example.gemini.MainActivity"
+                        )
                         if (runCatching { context.startActivity(intent) }.isFailure) {
                             showEngineInstall = true
                         }
