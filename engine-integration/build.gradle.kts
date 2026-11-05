@@ -27,10 +27,7 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
-kotlin {
-    jvmToolchain(21)
-    sourceSets.getByName("main").kotlin.srcDir("../vendor/antigem/app/src/main/java")
-}
+kotlin { jvmToolchain(21) }
 dependencies {
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
