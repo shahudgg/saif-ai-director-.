@@ -25,7 +25,7 @@ android {
         res.srcDir("../vendor/antigem/app/src/main/res")
         assets.srcDir("../vendor/antigem/app/src/main/assets")
     }
-    compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 kotlin { jvmToolchain(21) }
 dependencies {
