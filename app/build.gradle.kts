@@ -70,8 +70,8 @@ android {
     }
   }
   compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = if (providers.gradleProperty("embeddedEngine").isPresent) JavaVersion.VERSION_17 else JavaVersion.VERSION_11
+    targetCompatibility = if (providers.gradleProperty("embeddedEngine").isPresent) JavaVersion.VERSION_17 else JavaVersion.VERSION_11
   }
   buildFeatures {
     compose = true
