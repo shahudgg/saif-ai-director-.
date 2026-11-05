@@ -91,6 +91,7 @@ fun SaifAiApp(
     // Video Project Timeline Studio states
     var showVideoProjectDialog by remember { mutableStateOf(false) }
     var showNewProjectSheet by remember { mutableStateOf(false) }
+    var showEngineInstall by remember { mutableStateOf(false) }
     // Round 9: the purple mic opens SAIF AI's live conversation, powered by the SAIF AI AUTOMATION engine.
     var showLiveModeSheet by remember { mutableStateOf(false) }
     // Round 15: 🧰 POWER TOOLS — self test, crash log and 15 utilities, reachable from the header.
@@ -885,7 +886,13 @@ fun SaifAiApp(
                 },
                 onChoice = { choice ->
                     showNewProjectSheet = false
-                    if (choice == com.example.ui.components.NewProjectChoice.MORE) {
+                    if (choice == com.example.ui.components.NewProjectChoice.ADVANCE_ENGINE) {
+                        // Use the specific component, never launch an unrelated official Termux installation.
+                        val intent = android.content.Intent().setClassName("com.termux", "com.example.gemini.MainActivity")
+                        if (runCatching { context.startActivity(intent) }.isFailure) {
+                            showEngineInstall = true
+                        }
+                    } else if (choice == com.example.ui.components.NewProjectChoice.MORE) {
                         showVideoProjectDialog = true
                     } else if (claimCreateTap()) {
                         val (base, wf) = when (choice) {
@@ -906,6 +913,23 @@ fun SaifAiApp(
                         viewModel.createVideoProjectSession(proj, context)
                     }
                 }
+            )
+        }
+
+        if (showEngineInstall) {
+            AlertDialog(
+                onDismissRequest = { showEngineInstall = false },
+                title = { Text("Install the engine companion") },
+                text = { Text("The original workspace runs as a separate app using package com.termux. If official Termux is already installed, Android cannot install this companion alongside it: back up Termux data before considering removal. The companion cannot share the official Termux signature. Download and install it, then return here and tap the engine again. Internet and agent setup may be required.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val url = "https://github.com/shahudgg/saif-ai-director-./releases/download/saif-engine-companion-v1/saif-engine-companion.apk"
+                        runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))) }
+                            .onFailure { android.widget.Toast.makeText(context, "Unable to open the download link", android.widget.Toast.LENGTH_LONG).show() }
+                        showEngineInstall = false
+                    }) { Text("Download") }
+                },
+                dismissButton = { TextButton(onClick = { showEngineInstall = false }) { Text("Cancel") } }
             )
         }
 

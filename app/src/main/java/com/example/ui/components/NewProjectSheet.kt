@@ -55,7 +55,7 @@ import com.example.util.ProjectDataManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-enum class NewProjectChoice { AI_VIDEO, EDIT_WITH_AI, AI_VOICE_ON_VIDEO, VOICE_OVER_TO_VIDEO, BLANK, MORE }
+enum class NewProjectChoice { ADVANCE_ENGINE, AI_VIDEO, EDIT_WITH_AI, AI_VOICE_ON_VIDEO, VOICE_OVER_TO_VIDEO, BLANK, MORE }
 
 /** When each video project was last opened or created in this app (used for "last edited" in the recent list). */
 object RecentProjects {
@@ -105,6 +105,7 @@ fun NewProjectSheet(onDismiss: () -> Unit, onChoice: (NewProjectChoice) -> Unit,
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("New project", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Text("Choose how you want to start", color = Color(0xFF9E95AC), fontSize = 12.sp)
+            ChoiceRow(Icons.Filled.AutoAwesome, "SAIF ADVANCE EDITING ENGINE", "Original workspace · separate companion app") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.ADVANCE_ENGINE) }
             ChoiceRow(Icons.Filled.AutoAwesome, "AI video (Zero to Video)", "Topic or script → researched, animated, narrated video") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.AI_VIDEO) }
             ChoiceRow(Icons.Filled.ContentCut, "Edit my video with AI", "Analyze your footage and build a reversible edit plan") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.EDIT_WITH_AI) }
             ChoiceRow(Icons.Filled.RecordVoiceOver, "AI voice on my video", "Edit your footage and add AI narration that matches it") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onChoice(NewProjectChoice.AI_VOICE_ON_VIDEO) }

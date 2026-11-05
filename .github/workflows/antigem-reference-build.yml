@@ -6,7 +6,7 @@ on:
       - '.github/workflows/antigem-reference-build.yml'
       - 'vendor/antigem/**'
 permissions:
-  contents: read
+  contents: write
 jobs:
   reference-build:
     runs-on: ubuntu-latest
@@ -20,12 +20,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: vendor/antigem/agy_ide_bridge/go.mod
-      - name: Build original standard debug app
+      - name: Build original Termux variant debug app
         working-directory: vendor/antigem
         shell: bash
         run: |
           set -o pipefail
-          bash gradlew :app:assembleStandardDebug --no-daemon 2>&1 | tee "$RUNNER_TEMP/antigem-build.log"
+          bash gradlew :app:assembleTermuxDebug --no-daemon 2>&1 | tee "$RUNNER_TEMP/antigem-build.log"
       - name: Summarize errors
         if: failure()
         shell: bash
@@ -38,6 +38,15 @@ jobs:
         if: success()
         with:
           name: antigem-reference-debug
-          path: vendor/antigem/app/build/outputs/apk/standard/debug/*.apk
+          path: vendor/antigem/app/build/outputs/apk/termux/debug/*.apk
           if-no-files-found: error
           retention-days: 3
+      - name: Publish companion APK
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp vendor/antigem/app/build/outputs/apk/termux/debug/*.apk saif-engine-companion.apk
+          gh release view saif-engine-companion-v1 >/dev/null 2>&1 || gh release create saif-engine-companion-v1 --target "$GITHUB_SHA" --title "SAIF Advance Editing Engine companion" --notes "Companion built from the uploaded AntiGem source. License and original copyright notices are preserved in the source. Install alongside SAIF AI. This uses the com.termux package and cannot coexist with official Termux; back up Termux data before removing it."
+          gh release upload saif-engine-companion-v1 saif-engine-companion.apk --clobber
