@@ -46,6 +46,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            exec > /tmp/engine-script.log 2>&1
+            set -eux
             # Real official Termux must remain installed alongside the experimental SAIF APK.
             BASE='https://github.com/termux/termux-app/releases/download/v0.118.3'
             curl --fail --location --retry 3 "$BASE/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk" -o /tmp/termux-official.apk
@@ -63,7 +65,7 @@ jobs:
       - name: Report smoke test failure
         if: failure()
         run: |
-          python3 -c 'from pathlib import Path; p=Path("/tmp/engine-test.txt"); b=Path("/tmp/engine-build.log"); t=p.read_text(errors="replace") if p.exists() else ("\n".join(x for x in b.read_text(errors="replace").splitlines() if any(k in x.lower() for k in ("exception", "error", "failed", "caused by")))[-9500:] if b.exists() else "No build or test output"); print("::error::"+t[-10000:].replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
+          python3 -c 'from pathlib import Path; p=Path("/tmp/engine-test.txt"); d=Path("/tmp/engine-script.log"); b=Path("/tmp/engine-build.log"); t=p.read_text(errors="replace") if p.exists() else (d.read_text(errors="replace") if d.exists() else ("\n".join(x for x in b.read_text(errors="replace").splitlines() if any(k in x.lower() for k in ("exception", "error", "failed", "caused by")))[-9500:] if b.exists() else "No build or test output")); print("::error::"+t[-10000:].replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
