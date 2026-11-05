@@ -21,3 +21,14 @@ jobs:
           path: antigem-master (1).zip
           if-no-files-found: error
           retention-days: 1
+      - name: Inspect archive structure
+        run: |
+          unzip -l 'antigem-master (1).zip' | head -100
+          python3 - <<'PYCODE'
+          import zipfile
+          z = zipfile.ZipFile('antigem-master (1).zip')
+          for n in z.namelist():
+              if n.count('/') <= 2 and n.lower().endswith(('readme.md','settings.gradle.kts','build.gradle.kts')):
+                  print('\n===', n, '===')
+                  print(z.read(n).decode('utf-8',errors='replace')[:16000])
+          PYCODE
