@@ -19,6 +19,7 @@ dependencyResolutionManagement {
   repositories {
     google()
     mavenCentral()
+    if (providers.gradleProperty("embeddedEngine").isPresent) maven("https://jitpack.io")
   }
 }
 

@@ -175,3 +175,9 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }
+
+if (providers.gradleProperty("embeddedEngine").isPresent) {
+  configurations.configureEach {
+    resolutionStrategy.force("com.squareup.okhttp3:okhttp:4.12.0", "com.squareup.okhttp3:okhttp-android:4.12.0")
+  }
+}
