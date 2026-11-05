@@ -91,7 +91,6 @@ fun SaifAiApp(
     // Video Project Timeline Studio states
     var showVideoProjectDialog by remember { mutableStateOf(false) }
     var showNewProjectSheet by remember { mutableStateOf(false) }
-    var showAdvanceEngine by remember { mutableStateOf(false) }
     // Round 9: the purple mic opens SAIF AI's live conversation, powered by the SAIF AI AUTOMATION engine.
     var showLiveModeSheet by remember { mutableStateOf(false) }
     // Round 15: 🧰 POWER TOOLS — self test, crash log and 15 utilities, reachable from the header.
@@ -886,9 +885,7 @@ fun SaifAiApp(
                 },
                 onChoice = { choice ->
                     showNewProjectSheet = false
-                    if (choice == com.example.ui.components.NewProjectChoice.ADVANCE_ENGINE) {
-                        showAdvanceEngine = true
-                    } else if (choice == com.example.ui.components.NewProjectChoice.MORE) {
+                    if (choice == com.example.ui.components.NewProjectChoice.MORE) {
                         showVideoProjectDialog = true
                     } else if (claimCreateTap()) {
                         val (base, wf) = when (choice) {
@@ -1013,15 +1010,6 @@ fun SaifAiApp(
                     }
                 }
             )
-        }
-
-        // SAIF ADVANCE EDITING ENGINE — the engine bundle that ships inside the app.
-        AnimatedVisibility(
-            visible = showAdvanceEngine,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(tween(200)),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(tween(150))
-        ) {
-            com.example.advance.SaifAdvanceEngineScreen(onBack = { showAdvanceEngine = false })
         }
 
         // Fullscreen Video Timeline Studio Screen (with SAIF AI EDITING chat & Export studio)

@@ -1,0 +1,19 @@
+name: Inspect uploaded source
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          lfs: true
+      - name: Upload source archive for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: antigem-source
+          path: antigem-master (1).zip
+          if-no-files-found: error
+          retention-days: 1
