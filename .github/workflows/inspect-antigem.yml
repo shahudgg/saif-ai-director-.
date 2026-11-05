@@ -3,32 +3,38 @@ on:
   push:
     branches: ["arena/**"]
     paths: [".github/workflows/inspect-antigem.yml"]
-  workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   source:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
+          path: branch
+      - uses: actions/checkout@v4
+        with:
           ref: main
           lfs: true
-      - name: Upload source archive for inspection
-        uses: actions/upload-artifact@v4
-        with:
-          name: antigem-source
-          path: antigem-master (1).zip
-          if-no-files-found: error
-          retention-days: 1
-      - name: Inspect archive structure
+          path: main-source
+      - name: Save archive inventory to branch
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
-          unzip -l 'antigem-master (1).zip' | head -100
-          python3 - <<'PYCODE'
-          import zipfile
-          z = zipfile.ZipFile('antigem-master (1).zip')
-          for n in z.namelist():
-              if n.count('/') <= 2 and n.lower().endswith(('readme.md','settings.gradle.kts','build.gradle.kts')):
-                  print('\n===', n, '===')
-                  print(z.read(n).decode('utf-8',errors='replace')[:16000])
-          PYCODE
+          python3 - <<'PY'
+          import zipfile, pathlib
+          z = zipfile.ZipFile('main-source/antigem-master (1).zip')
+          names = z.infolist()
+          output = ['Files: %d; expanded bytes: %d' % (len(names), sum(x.file_size for x in names))]
+          output.extend('%9d %s' % (i.file_size, i.filename) for i in names)
+          for i in names:
+              if i.filename.count('/') <= 2 and i.filename.lower().endswith(('readme.md','settings.gradle.kts','build.gradle.kts')) and i.file_size < 100000:
+                  output.extend(['\n=== '+i.filename+' ===', z.read(i).decode('utf8',errors='replace')])
+          pathlib.Path('branch/antigem-inventory.txt').write_text('\n'.join(output))
+          PY
+          cd branch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add antigem-inventory.txt
+          git commit -m 'Inventory uploaded archive' && git push origin "HEAD:$BRANCH"
