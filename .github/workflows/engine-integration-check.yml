@@ -25,4 +25,4 @@ jobs:
       - name: Report errors
         if: failure()
         run: |
-          tail -100 "$RUNNER_TEMP/build.log" | while IFS= read -r line; do echo "::error::$line"; done || true
+          python3 -c 'import os; t=open(os.environ["RUNNER_TEMP"]+"/build.log").read(); i=t.find("* What went wrong:"); t=t[i:i+9000] if i>=0 else t[-9000:]; print("::error::"+t.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))' 
