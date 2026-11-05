@@ -17,6 +17,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: vendor/antigem/agy_ide_bridge/go.mod
+          cache: false
       - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '9.3.1'

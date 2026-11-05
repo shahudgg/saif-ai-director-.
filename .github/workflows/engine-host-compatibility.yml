@@ -19,6 +19,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: vendor/antigem/agy_ide_bridge/go.mod
+          cache: false
       - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '9.3.1'
@@ -27,6 +31,26 @@ jobs:
         run: |
           set -o pipefail
           gradle :app:assembleDebug -PembeddedEngine --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Check bundled engine assets
+        run: |
+          python3 - <<'PYCODE'
+          import zipfile
+          p = 'app/build/outputs/apk/debug/app-debug.apk'
+          with zipfile.ZipFile(p) as z:
+              names = set(z.namelist())
+              required = [
+                  'assets/bin/agy_ide_bridge', 'assets/bin/backup_bootstrap',
+                  'assets/bin/backup_chats', 'assets/bin/restore_chats',
+                  'assets/browser-extensions/google-flow/manifest.json',
+                  'assets/extension-docs/README.md', 'assets/licenses/ANTIGEM_GPL-3.0.txt'
+              ]
+              missing = [n for n in required if n not in names]
+              if missing: raise SystemExit('Missing bundled assets: ' + ', '.join(missing))
+              elf = z.read('assets/bin/agy_ide_bridge')[:20]
+              if elf[:4] != b'\x7fELF' or int.from_bytes(elf[18:20], 'little') != 183:
+                  raise SystemExit('Bridge is not an arm64 ELF')
+              print('Required engine assets and arm64 bridge verified in APK')
+          PYCODE
       - name: Report errors
         if: failure()
         run: |

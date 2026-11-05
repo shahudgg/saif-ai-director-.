@@ -123,7 +123,30 @@ configurations.configureEach {
 val bundleEngineResources by tasks.registering(Sync::class) {
     from("../vendor/antigem/extensions") { into("browser-extensions") }
     from("../vendor/antigem/extension_docs") { into("extension-docs") }
+    from("../vendor/antigem/LICENSE") { into("licenses"); rename { "ANTIGEM_GPL-3.0.txt" } }
+    from("../vendor/antigem/scripts") {
+        include("backup_bootstrap.sh", "backup_chats.sh", "restore_chats.sh")
+        into("bin")
+        rename { it.removeSuffix(".sh") }
+    }
     into(layout.buildDirectory.dir("generated/engineAssets"))
 }
 android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/engineAssets").get().asFile)
 tasks.named("preBuild").configure { dependsOn(bundleEngineResources) }
+
+// The original app builds the Go bridge at build time for Android arm64.
+// Generate it in the build directory, rather than modifying the vendored source tree.
+val buildEngineBridge by tasks.registering(Exec::class) {
+    val bridgeDir = file("../vendor/antigem/agy_ide_bridge")
+    val output = layout.buildDirectory.file("generated/bridgeAssets/bin/agy_ide_bridge")
+    inputs.dir(bridgeDir)
+    outputs.file(output)
+    workingDir = bridgeDir
+    environment("GOOS", "android")
+    environment("GOARCH", "arm64")
+    environment("CGO_ENABLED", "0")
+    doFirst { output.get().asFile.parentFile.mkdirs() }
+    commandLine("go", "build", "-ldflags=-s -w", "-o", output.get().asFile.absolutePath, "main.go")
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/bridgeAssets").get().asFile)
+tasks.named("preBuild").configure { dependsOn(buildEngineBridge) }
