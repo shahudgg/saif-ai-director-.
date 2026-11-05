@@ -1,5 +1,9 @@
 name: Inspect uploaded source
-on: workflow_dispatch
+on:
+  push:
+    branches: ["arena/**"]
+    paths: [".github/workflows/inspect-antigem.yml"]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
