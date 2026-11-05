@@ -44,6 +44,10 @@ jobs:
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb shell am instrument -w -r -e class com.example.EmbeddedEngineSmokeTest com.saifai.assistant.test/androidx.test.runner.AndroidJUnitRunner | tee /tmp/engine-test.txt
             grep -q 'OK (1 test)' /tmp/engine-test.txt
+      - name: Report smoke test failure
+        if: failure()
+        run: |
+          python3 -c 'from pathlib import Path; p=Path("/tmp/engine-test.txt"); t=p.read_text(errors="replace") if p.exists() else "No test output: emulator setup, installation, or boot failed before instrumentation started."; print("::error::"+t[-10000:].replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
