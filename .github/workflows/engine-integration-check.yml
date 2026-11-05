@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          gradle -p engine-integration assembleDebug --no-daemon 2>&1 | tee "$RUNNER_TEMP/build.log"
+          gradle -p engine-integration assembleDebug testDebugUnitTest --no-daemon 2>&1 | tee "$RUNNER_TEMP/build.log"
       - name: Report errors
         if: failure()
         run: |

@@ -69,7 +69,7 @@ object LocalEnvironmentManager {
     const val UBUNTU_ROOTFS_URL = "https://github.com/termux/proot-distro/releases/download/v4.30.1/ubuntu-questing-aarch64-pd-v4.30.1.tar.xz"
     const val UBUNTU_ROOTFS_TAG = "v4.30.1"
     const val UBUNTU_ROOTFS_ASSET = "ubuntu-questing-aarch64-pd-v4.30.1.tar.xz"
-    const val UBUNTU_ROOTFS_SIZE_BYTES = 35 * 1024 * 1024L
+    const val UBUNTU_ROOTFS_SIZE_BYTES = RootfsIntegrity.UBUNTU_ARM64_SIZE
 
     private const val NOTIFICATION_CHANNEL_ID = "antigem_bootstrap_install"
     private const val NOTIFICATION_ID = 4096
@@ -740,7 +740,7 @@ object LocalEnvironmentManager {
                 assetName = UBUNTU_ROOTFS_ASSET,
                 arch = "arm64",
                 sizeBytes = UBUNTU_ROOTFS_SIZE_BYTES,
-                sizeFormatted = "~29 MB",
+                sizeFormatted = "~55 MB",
                 packageName = packageName
             )
         }
@@ -851,6 +851,19 @@ object LocalEnvironmentManager {
         val projectsDir = getProjectsDir(appContext)
 
         val arch = getBootstrapArch()
+
+        // SAIF's embedded build does not yet provide a validated private runtime.
+        // Do not download or advertise a setup that cannot execute; in particular,
+        // never fall back to another application's Termux files.
+        if (appContext.packageName == "com.saifai.assistant") {
+            val reason = if (!Build.SUPPORTED_ABIS.contains("arm64-v8a")) {
+                "This experimental engine currently requires an arm64 device."
+            } else {
+                "The embedded Linux runtime is not yet available for this Android version. No download was started."
+            }
+            _installerState.value = LocalInstallerState.Error(errorMessage = reason, canRetry = false)
+            return@withContext false
+        }
 
         clearLogs()
         log("Starting installation: arch=$arch, source=${source.javaClass.simpleName}")
@@ -1222,6 +1235,19 @@ object LocalEnvironmentManager {
                     errorMessage = errorMsg,
                     canRetry = true
                 )
+                return@withContext false
+            }
+
+            // The fixed Ubuntu release must match the published digest before any extraction.
+            // Custom/local archives have no trusted expected hash and are not covered by this pin.
+            if (source is BootstrapSource.Auto && !isTermuxPackage(appContext) &&
+                !RootfsIntegrity.matches(tempZipFile, RootfsIntegrity.UBUNTU_ARM64_SIZE, RootfsIntegrity.UBUNTU_ARM64_SHA256)
+            ) {
+                tempZipFile.delete()
+                val message = "Ubuntu rootfs integrity check failed. Nothing was extracted."
+                log(message)
+                updateInstallNotification(appContext, "Installation Failed", message, -2, ongoing = false, force = true)
+                _installerState.value = LocalInstallerState.Error(errorMessage = message, canRetry = true)
                 return@withContext false
             }
 
