@@ -1,5 +1,5 @@
 plugins {
-    id("com.android.library") version "9.0.1"
+    id("com.android.library") version "9.1.1"
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.wire)
