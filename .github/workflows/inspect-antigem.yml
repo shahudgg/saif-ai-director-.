@@ -18,23 +18,27 @@ jobs:
           ref: main
           lfs: true
           path: main-source
-      - name: Save archive inventory to branch
+      - name: Extract source safely to branch
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
-          python3 - <<'PY'
-          import zipfile, pathlib
+          python3 - <<'PYCODE'
+          import zipfile, pathlib, stat
           z = zipfile.ZipFile('main-source/antigem-master (1).zip')
-          names = z.infolist()
-          output = ['Files: %d; expanded bytes: %d' % (len(names), sum(x.file_size for x in names))]
-          output.extend('%9d %s' % (i.file_size, i.filename) for i in names)
-          for i in names:
-              if i.filename.count('/') <= 2 and i.filename.lower().endswith(('readme.md','settings.gradle.kts','build.gradle.kts')) and i.file_size < 100000:
-                  output.extend(['\n=== '+i.filename+' ===', z.read(i).decode('utf8',errors='replace')])
-          pathlib.Path('branch/antigem-inventory.txt').write_text('\n'.join(output))
-          PY
+          dest = pathlib.Path('branch/vendor/antigem').resolve()
+          for info in z.infolist():
+              p = pathlib.PurePosixPath(info.filename)
+              if not p.parts or p.parts[0] != 'antigem-master': raise ValueError(info.filename)
+              parts = p.parts[1:]
+              if not parts: continue
+              if any(x in ('..', '.git') for x in parts) or stat.S_ISLNK(info.external_attr >> 16): raise ValueError(info.filename)
+              out = dest.joinpath(*parts)
+              if info.is_dir(): out.mkdir(parents=True, exist_ok=True); continue
+              out.parent.mkdir(parents=True, exist_ok=True)
+              out.write_bytes(z.read(info))
+          PYCODE
           cd branch
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add antigem-inventory.txt
-          git commit -m 'Inventory uploaded archive' && git push origin "HEAD:$BRANCH"
+          git add -f vendor/antigem
+          git commit -m 'Extract uploaded AntiGem source with license' && git push origin "HEAD:$BRANCH"
