@@ -25,4 +25,4 @@ jobs:
       - name: Report errors
         if: failure()
         run: |
-          grep -E '(^e: |^FAILURE:|^\* What went wrong:|^Execution failed|^> Could not|^BUILD FAILED)' "$RUNNER_TEMP/build.log" | head -30 | while IFS= read -r line; do echo "::error::$line"; done || true
+          tail -100 "$RUNNER_TEMP/build.log" | while IFS= read -r line; do echo "::error::$line"; done || true
