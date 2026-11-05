@@ -16,7 +16,7 @@ import java.util.zip.ZipOutputStream
  * and every spec document) ships inside the APK as read-only assets under `assets/saif_engine/`.
  *
  * Android cannot hand its private assets to Termux or to a browser, so this object packs the whole tree
- * into ONE zip and publishes it to the public **Download/SAIF_AI_Engine/** folder. From there:
+ * into ONE zip and publishes it to the public Download/SAIF_AI_Engine/ folder. From there:
  *   • Termux can unzip it and build the Go bridge / run the Python tools,
  *   • Kiwi (or desktop Chrome) can load `extensions/google-flow` as an unpacked extension.
  *
