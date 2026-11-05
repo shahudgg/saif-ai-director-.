@@ -46,6 +46,9 @@ jobs:
               ]
               missing = [n for n in required if n not in names]
               if missing: raise SystemExit('Missing bundled assets: ' + ', '.join(missing))
+              dex = [z.read(n) for n in names if n.startswith('classes') and n.endswith('.dex')]
+              if not any(b'Lcom/example/gemini/MainActivity;' in data for data in dex):
+                  raise SystemExit('Engine MainActivity class missing from APK dex')
               elf = z.read('assets/bin/agy_ide_bridge')[:20]
               if elf[:4] != b'\x7fELF' or int.from_bytes(elf[18:20], 'little') != 183:
                   raise SystemExit('Bridge is not an arm64 ELF')
