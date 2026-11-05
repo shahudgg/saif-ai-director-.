@@ -11,7 +11,7 @@ gradle -p engine-integration assembleDebug
 gradle :app:assembleDebug -PembeddedEngine
 ```
 
-GitHub Actions runs this check on changes to this directory. The original source and its GPL license are under `vendor/antigem`.
+GitHub Actions checks the library and the opt-in host APK, including the bridge binary and other bundled assets. A separate API 35 x86_64 emulator smoke test launches the internal engine activity and checks that it reaches RESUMED. This is only a launch smoke test: it does not exercise terminal installation, agent setup, or the case where official Termux is installed. The original source and its GPL license are under `vendor/antigem`.
 
 ## Remaining integration work
 
@@ -20,4 +20,4 @@ GitHub Actions runs this check on changes to this directory. The original source
 - The opt-in build compiles and bundles the original Android arm64 Go bridge, scripts, extension assets, documentation and GPL license. APK contents are checked in CI, but actual execution is not verified. Implement runtime downloads with checksums, network failure handling, storage, upgrades and cancellation; report installation success only after real execution is verified.
 - Test original screens and real chat, editor, terminal, browser and agent integration on devices, including one with official Termux installed. Preserve GPL notices and third-party license obligations when rebranding.
 
-A successful library compilation alone does not test runtime behavior or establish compatibility with the host app.
+A successful build and activity launch alone do not demonstrate a working Linux runtime, agent functionality, or compatibility with the official Termux app. The opt-in build must not be promoted as a complete engine until those paths are tested.
