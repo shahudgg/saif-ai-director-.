@@ -112,3 +112,7 @@ wire {
     sourcePath { srcDir("../vendor/antigem/app/src/main/proto") }
     kotlin { rpcRole = "client"; rpcCallStyle = "suspending" }
 }
+
+configurations.configureEach {
+    resolutionStrategy.force("com.squareup.okhttp3:okhttp:4.12.0", "com.squareup.okhttp3:okhttp-android:4.12.0")
+}
