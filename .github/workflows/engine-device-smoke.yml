@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/engine-device-smoke.yml'
       - 'app/src/androidTest/java/com/example/EmbeddedEngineSmokeTest.kt'
+      - 'engine-integration/**'
+      - 'app/build.gradle.kts'
+      - 'settings.gradle.kts'
 permissions:
   contents: read
 jobs:
