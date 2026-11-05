@@ -101,6 +101,9 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
+  if (providers.gradleProperty("embeddedEngine").isPresent) {
+    implementation("com.saif.engine:embedded-engine:1.0")
+  }
   // SAIF AI AUTOMATION (red + button): JARVIS by Tech GPTx, rebuilt as a module
   implementation(project(":automation"))
   implementation(platform(libs.androidx.compose.bom))

@@ -1,0 +1,33 @@
+name: Embedded engine host compatibility
+on:
+  push:
+    branches: ["arena/**"]
+    paths:
+      - '.github/workflows/engine-host-compatibility.yml'
+      - 'engine-integration/**'
+      - 'settings.gradle.kts'
+      - 'app/build.gradle.kts'
+permissions:
+  contents: read
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '9.3.1'
+      - name: Compile host with embedded engine experiment
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug -PembeddedEngine --no-daemon 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Report errors
+        if: failure()
+        run: |
+          python3 -c 'import os; p=os.environ["RUNNER_TEMP"]+"/build.log"; t=open(p).read() if os.path.isfile(p) else "No build log"; i=t.find("* What went wrong:"); t=t[i:i+9000] if i>=0 else t[-9000:]; print("::error::"+t.replace("%","%25").replace("\n","%0A").replace("\r","%0D"))'

@@ -4,6 +4,9 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.wire)
 }
+group = "com.saif.engine"
+version = "1.0"
+
 android {
     namespace = "com.example.gemini"
     compileSdk = 36

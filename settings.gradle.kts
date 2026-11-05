@@ -26,3 +26,8 @@ rootProject.name = "SAIF AI"
 
 include(":app")
 include(":automation")
+
+// Opt-in only while embedded engine is under compatibility testing.
+if (providers.gradleProperty("embeddedEngine").isPresent) {
+  includeBuild("engine-integration")
+}
