@@ -11,7 +11,7 @@ gradle -p engine-integration assembleDebug
 gradle :app:assembleDebug -PembeddedEngine
 ```
 
-GitHub Actions checks the library and the opt-in host APK, including the bridge binary and other bundled assets. A separate API 35 x86_64 emulator smoke test launches the internal engine activity and checks that it reaches RESUMED. This is only a launch smoke test: it does not exercise terminal installation, agent setup, or the case where official Termux is installed. The original source and its GPL license are under `vendor/antigem`.
+GitHub Actions checks the library and the opt-in host APK, including the bridge binary and other bundled assets. A separate API 35 x86_64 emulator smoke test installs the official Termux APK, launches the internal engine activity, checks that it reaches RESUMED, and verifies Termux remains installed. This is only a coexistence and launch smoke test: it does not exercise terminal installation, terminal execution, or agent setup. The original source and its GPL license are under `vendor/antigem`.
 
 ## Remaining integration work
 
